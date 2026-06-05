@@ -1,0 +1,12 @@
+.DS_Store
+*.pyc
+__pycache__/
+
+# Build products and generated sticker assets
+outputs/
+work/CartoonCursor/.build/
+work/puppy_test_43/
+
+# Local editor/system files
+.idea/
+.vscode/
