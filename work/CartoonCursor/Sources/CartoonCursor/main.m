@@ -7,6 +7,7 @@
 static NSString * const DefaultsKeyEnabled = @"enabled";
 static NSString * const DefaultsKeyStickerWalkFollow = @"stickerWalkFollow";
 static NSString * const DefaultsKeyStickerWalkSpeed = @"stickerWalkSpeed";
+static NSString * const DefaultsKeyStickerWalkAmplitude = @"stickerWalkAmplitude";
 static NSString * const DefaultsKeyHideSystemCursor = @"hideSystemCursor";
 static NSString * const DefaultsKeyCursorSize = @"cursorSize";
 static NSString * const DefaultsKeyImagePath = @"imagePath";
@@ -27,6 +28,7 @@ static const NSInteger CurrentBehaviorVersion = 6;
 static const NSTimeInterval CursorSuppressionInterval = 0.05;
 static const CGFloat DefaultCoverCursorSize = 160.0;
 static const CGFloat DefaultStickerWalkSpeed = 1.0;
+static const CGFloat DefaultStickerWalkAmplitude = 1.0;
 
 typedef NS_ENUM(NSInteger, CursorEffectStyle) {
     CursorEffectStyleOff = 0,
@@ -106,7 +108,14 @@ static CGFloat CartoonClampedStickerWalkSpeed(CGFloat speed) {
     if (!isfinite(speed) || speed <= 0) {
         return DefaultStickerWalkSpeed;
     }
-    return MAX(0.45, MIN(2.2, speed));
+    return MAX(0.30, MIN(2.2, speed));
+}
+
+static CGFloat CartoonClampedStickerWalkAmplitude(CGFloat amplitude) {
+    if (!isfinite(amplitude) || amplitude <= 0) {
+        return DefaultStickerWalkAmplitude;
+    }
+    return MAX(0.25, MIN(1.8, amplitude));
 }
 
 @interface OverlayWindow : NSWindow
@@ -173,6 +182,7 @@ static CGFloat CartoonClampedStickerWalkSpeed(CGFloat speed) {
 @property(nonatomic, assign) BOOL stickerVisible;
 @property(nonatomic, assign) BOOL stickerWalkFollowEnabled;
 @property(nonatomic, assign) CGFloat stickerWalkSpeedMultiplier;
+@property(nonatomic, assign) CGFloat stickerWalkAmplitudeMultiplier;
 @property(nonatomic, assign) CursorEffectStyle effectStyle;
 @property(nonatomic, assign) EffectColorMode effectColorMode;
 @property(nonatomic, assign) BOOL nativeCursorEffectsEnabled;
@@ -216,6 +226,7 @@ static CGFloat CartoonClampedStickerWalkSpeed(CGFloat speed) {
     CGFloat _stickerWalkPhase;
     CGFloat _stickerWalkSpeed;
     CGFloat _stickerWalkSpeedMultiplier;
+    CGFloat _stickerWalkAmplitudeMultiplier;
     CGFloat _stickerWalkTilt;
     NSTimeInterval _lastTrailSampleTime;
 }
@@ -231,6 +242,7 @@ static CGFloat CartoonClampedStickerWalkSpeed(CGFloat speed) {
     _stickerVisible = NO;
     _stickerWalkFollowEnabled = NO;
     _stickerWalkSpeedMultiplier = DefaultStickerWalkSpeed;
+    _stickerWalkAmplitudeMultiplier = DefaultStickerWalkAmplitude;
     _hasStickerDrawPoint = NO;
     _hasTrailAnchorPoint = NO;
     _effectStyle = CursorEffectStyleSparklesTrail;
@@ -309,6 +321,11 @@ static CGFloat CartoonClampedStickerWalkSpeed(CGFloat speed) {
 
 - (void)setStickerWalkSpeedMultiplier:(CGFloat)stickerWalkSpeedMultiplier {
     _stickerWalkSpeedMultiplier = CartoonClampedStickerWalkSpeed(stickerWalkSpeedMultiplier);
+}
+
+- (void)setStickerWalkAmplitudeMultiplier:(CGFloat)stickerWalkAmplitudeMultiplier {
+    _stickerWalkAmplitudeMultiplier = CartoonClampedStickerWalkAmplitude(stickerWalkAmplitudeMultiplier);
+    self.needsDisplay = YES;
 }
 
 - (void)setEffectStyle:(CursorEffectStyle)effectStyle {
@@ -487,13 +504,14 @@ static CGFloat CartoonClampedStickerWalkSpeed(CGFloat speed) {
 
     CGFloat step = sin(_stickerWalkPhase);
     CGFloat landing = fabs(step);
-    CGFloat bob = step * self.cursorSize * 0.030 * intensity;
-    CGFloat squash = landing * 0.045 * intensity;
+    CGFloat amplitude = _stickerWalkAmplitudeMultiplier;
+    CGFloat bob = step * self.cursorSize * 0.030 * intensity * amplitude;
+    CGFloat squash = landing * 0.045 * intensity * amplitude;
     CGFloat stretch = squash * 0.42;
 
     NSAffineTransform *transform = [NSAffineTransform transform];
     [transform translateXBy:NSMidX(rect) yBy:NSMidY(rect) + bob];
-    [transform rotateByRadians:_stickerWalkTilt * intensity];
+    [transform rotateByRadians:_stickerWalkTilt * intensity * amplitude];
     [transform scaleXBy:1.0 + stretch yBy:1.0 - squash];
     [transform translateXBy:-NSMidX(rect) yBy:-NSMidY(rect)];
     [transform concat];
@@ -1158,6 +1176,7 @@ static CGFloat CartoonClampedStickerWalkSpeed(CGFloat speed) {
 @property(nonatomic, assign, getter=isEnabled) BOOL enabled;
 @property(nonatomic, assign) BOOL stickerWalkFollowEnabled;
 @property(nonatomic, assign) CGFloat stickerWalkSpeedMultiplier;
+@property(nonatomic, assign) CGFloat stickerWalkAmplitudeMultiplier;
 @property(nonatomic, assign) BOOL nativeCursorEffectsEnabled;
 @property(nonatomic, assign) BOOL hideSystemCursor;
 @property(nonatomic, assign) BOOL virtualCursorEnabled;
@@ -1204,6 +1223,7 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     BOOL _mouseCursorAssociated;
     BOOL _stickerWalkFollowEnabled;
     CGFloat _stickerWalkSpeedMultiplier;
+    CGFloat _stickerWalkAmplitudeMultiplier;
     BOOL _nativeCursorEffectsEnabled;
     CGPoint _virtualQuartzPoint;
     CursorEffectStyle _effectStyle;
@@ -1271,6 +1291,13 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
         [defaults setDouble:_stickerWalkSpeedMultiplier forKey:DefaultsKeyStickerWalkSpeed];
     } else {
         _stickerWalkSpeedMultiplier = CartoonClampedStickerWalkSpeed([defaults doubleForKey:DefaultsKeyStickerWalkSpeed]);
+    }
+
+    if ([defaults objectForKey:DefaultsKeyStickerWalkAmplitude] == nil) {
+        _stickerWalkAmplitudeMultiplier = DefaultStickerWalkAmplitude;
+        [defaults setDouble:_stickerWalkAmplitudeMultiplier forKey:DefaultsKeyStickerWalkAmplitude];
+    } else {
+        _stickerWalkAmplitudeMultiplier = CartoonClampedStickerWalkAmplitude([defaults doubleForKey:DefaultsKeyStickerWalkAmplitude]);
     }
 
     NSInteger behaviorVersion = [defaults integerForKey:DefaultsKeyBehaviorVersion];
@@ -1444,6 +1471,18 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     [NSUserDefaults.standardUserDefaults setDouble:_stickerWalkSpeedMultiplier forKey:DefaultsKeyStickerWalkSpeed];
     for (CursorView *view in _views) {
         view.stickerWalkSpeedMultiplier = _stickerWalkSpeedMultiplier;
+    }
+}
+
+- (CGFloat)stickerWalkAmplitudeMultiplier {
+    return _stickerWalkAmplitudeMultiplier;
+}
+
+- (void)setStickerWalkAmplitudeMultiplier:(CGFloat)stickerWalkAmplitudeMultiplier {
+    _stickerWalkAmplitudeMultiplier = CartoonClampedStickerWalkAmplitude(stickerWalkAmplitudeMultiplier);
+    [NSUserDefaults.standardUserDefaults setDouble:_stickerWalkAmplitudeMultiplier forKey:DefaultsKeyStickerWalkAmplitude];
+    for (CursorView *view in _views) {
+        view.stickerWalkAmplitudeMultiplier = _stickerWalkAmplitudeMultiplier;
     }
 }
 
@@ -1679,6 +1718,7 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
         newView.effectStyle = self.effectStyle;
         newView.stickerWalkFollowEnabled = self.stickerWalkFollowEnabled;
         newView.stickerWalkSpeedMultiplier = self.stickerWalkSpeedMultiplier;
+        newView.stickerWalkAmplitudeMultiplier = self.stickerWalkAmplitudeMultiplier;
         newView.customTrailColors = self.customTrailColors;
         newView.customClickColors = self.customClickColors;
         newView.customParticleColors = self.customParticleColors;
@@ -2753,10 +2793,20 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
 
 - (NSArray<NSDictionary *> *)stickerWalkSpeedOptions {
     return @[
+        @{@"title": @"Very Slow", @"value": @0.35},
         @{@"title": @"Slow", @"value": @0.65},
         @{@"title": @"Normal", @"value": @1.0},
         @{@"title": @"Fast", @"value": @1.45},
         @{@"title": @"Very Fast", @"value": @2.0}
+    ];
+}
+
+- (NSArray<NSDictionary *> *)stickerWalkAmplitudeOptions {
+    return @[
+        @{@"title": @"Tiny", @"value": @0.35},
+        @{@"title": @"Small", @"value": @0.65},
+        @{@"title": @"Normal", @"value": @1.0},
+        @{@"title": @"Bouncy", @"value": @1.35}
     ];
 }
 
@@ -2795,6 +2845,25 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     }
     walkSpeedItem.submenu = walkSpeedMenu;
     [menu addItem:walkSpeedItem];
+
+    NSMenuItem *walkAmplitudeItem = [[NSMenuItem alloc] initWithTitle:@"Sticker Walk Amplitude"
+                                                               action:nil
+                                                        keyEquivalent:@""];
+    NSMenu *walkAmplitudeMenu = [[NSMenu alloc] init];
+    for (NSDictionary *option in [self stickerWalkAmplitudeOptions]) {
+        NSNumber *amplitude = option[@"value"];
+        NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:option[@"title"]
+                                                      action:@selector(selectStickerWalkAmplitude:)
+                                               keyEquivalent:@""];
+        item.target = self;
+        item.representedObject = amplitude;
+        item.state = fabs(_cursorController.stickerWalkAmplitudeMultiplier - amplitude.doubleValue) < 0.01 ?
+            NSControlStateValueOn :
+            NSControlStateValueOff;
+        [walkAmplitudeMenu addItem:item];
+    }
+    walkAmplitudeItem.submenu = walkAmplitudeMenu;
+    [menu addItem:walkAmplitudeItem];
 
     NSMenuItem *nativeEffectsItem = [[NSMenuItem alloc] initWithTitle:@"Native Cursor Effects"
                                                                action:@selector(toggleNativeCursorEffects:)
@@ -2915,6 +2984,16 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     }
 
     _cursorController.stickerWalkSpeedMultiplier = speed.doubleValue;
+    [self rebuildMenu];
+}
+
+- (void)selectStickerWalkAmplitude:(NSMenuItem *)sender {
+    NSNumber *amplitude = sender.representedObject;
+    if (![amplitude isKindOfClass:NSNumber.class]) {
+        return;
+    }
+
+    _cursorController.stickerWalkAmplitudeMultiplier = amplitude.doubleValue;
     [self rebuildMenu];
 }
 
