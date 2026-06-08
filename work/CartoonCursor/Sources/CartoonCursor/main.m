@@ -5,6 +5,7 @@
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
 static NSString * const DefaultsKeyEnabled = @"enabled";
+static NSString * const DefaultsKeyStickerWalkFollow = @"stickerWalkFollow";
 static NSString * const DefaultsKeyHideSystemCursor = @"hideSystemCursor";
 static NSString * const DefaultsKeyCursorSize = @"cursorSize";
 static NSString * const DefaultsKeyImagePath = @"imagePath";
@@ -161,6 +162,7 @@ static NSColor *CartoonColorFromHexString(NSString *hexString) {
 @property(nonatomic, strong) NSImage *image;
 @property(nonatomic, assign) BOOL cursorVisible;
 @property(nonatomic, assign) BOOL stickerVisible;
+@property(nonatomic, assign) BOOL stickerWalkFollowEnabled;
 @property(nonatomic, assign) CursorEffectStyle effectStyle;
 @property(nonatomic, assign) EffectColorMode effectColorMode;
 @property(nonatomic, assign) BOOL nativeCursorEffectsEnabled;
@@ -195,6 +197,15 @@ static NSColor *CartoonColorFromHexString(NSString *hexString) {
     EffectColorMode _effectColorMode;
     EffectColorMode _nativeEffectColorMode;
     BOOL _nativeCursorEffectsEnabled;
+    BOOL _stickerWalkFollowEnabled;
+    BOOL _hasStickerDrawPoint;
+    NSPoint _stickerDrawPoint;
+    NSPoint _lastTrailAnchorPoint;
+    BOOL _hasTrailAnchorPoint;
+    NSTimeInterval _lastStickerAnimationTime;
+    CGFloat _stickerWalkPhase;
+    CGFloat _stickerWalkSpeed;
+    CGFloat _stickerWalkTilt;
     NSTimeInterval _lastTrailSampleTime;
 }
 
@@ -207,6 +218,9 @@ static NSColor *CartoonColorFromHexString(NSString *hexString) {
     _cursorSize = 64;
     _cursorVisible = NO;
     _stickerVisible = NO;
+    _stickerWalkFollowEnabled = NO;
+    _hasStickerDrawPoint = NO;
+    _hasTrailAnchorPoint = NO;
     _effectStyle = CursorEffectStyleSparklesTrail;
     _effectColorMode = EffectColorModeAuto;
     _nativeEffectColorMode = EffectColorModeAuto;
@@ -235,9 +249,15 @@ static NSColor *CartoonColorFromHexString(NSString *hexString) {
 }
 
 - (void)setCursorPoint:(NSPoint)cursorPoint {
-    NSPoint previousPoint = _cursorPoint;
     _cursorPoint = cursorPoint;
-    [self maybeAddTrailPointFromPreviousPoint:previousPoint toPoint:cursorPoint];
+    [self updateStickerMotionTowardPoint:cursorPoint];
+
+    NSPoint trailPoint = [self trailAnchorPoint];
+    if (_hasTrailAnchorPoint) {
+        [self maybeAddTrailPointFromPreviousPoint:_lastTrailAnchorPoint toPoint:trailPoint];
+    }
+    _lastTrailAnchorPoint = trailPoint;
+    _hasTrailAnchorPoint = YES;
     self.needsDisplay = YES;
 }
 
@@ -254,11 +274,24 @@ static NSColor *CartoonColorFromHexString(NSString *hexString) {
 
 - (void)setCursorVisible:(BOOL)cursorVisible {
     _cursorVisible = cursorVisible;
+    if (!cursorVisible) {
+        _hasTrailAnchorPoint = NO;
+        [self resetStickerMotion];
+    }
     self.needsDisplay = YES;
 }
 
 - (void)setStickerVisible:(BOOL)stickerVisible {
     _stickerVisible = stickerVisible;
+    if (!stickerVisible) {
+        [self resetStickerMotion];
+    }
+    self.needsDisplay = YES;
+}
+
+- (void)setStickerWalkFollowEnabled:(BOOL)stickerWalkFollowEnabled {
+    _stickerWalkFollowEnabled = stickerWalkFollowEnabled;
+    [self resetStickerMotion];
     self.needsDisplay = YES;
 }
 
@@ -351,6 +384,105 @@ static NSColor *CartoonColorFromHexString(NSString *hexString) {
     _nativeParticleEffectColors = defaults;
 }
 
+- (void)resetStickerMotion {
+    _hasStickerDrawPoint = NO;
+    _hasTrailAnchorPoint = NO;
+    _lastStickerAnimationTime = 0;
+    _stickerWalkPhase = 0;
+    _stickerWalkSpeed = 0;
+    _stickerWalkTilt = 0;
+}
+
+- (void)updateStickerMotionTowardPoint:(NSPoint)targetPoint {
+    NSTimeInterval now = NSDate.timeIntervalSinceReferenceDate;
+    if (!_stickerWalkFollowEnabled || !self.stickerVisible) {
+        _stickerDrawPoint = targetPoint;
+        _hasStickerDrawPoint = YES;
+        _lastStickerAnimationTime = now;
+        _stickerWalkSpeed = 0;
+        _stickerWalkTilt *= 0.72;
+        return;
+    }
+
+    if (!_hasStickerDrawPoint || _lastStickerAnimationTime <= 0) {
+        _stickerDrawPoint = targetPoint;
+        _hasStickerDrawPoint = YES;
+        _lastStickerAnimationTime = now;
+        return;
+    }
+
+    NSTimeInterval deltaTime = MAX(1.0 / 240.0, MIN(1.0 / 20.0, now - _lastStickerAnimationTime));
+    _lastStickerAnimationTime = now;
+
+    CGFloat deltaX = targetPoint.x - _stickerDrawPoint.x;
+    CGFloat deltaY = targetPoint.y - _stickerDrawPoint.y;
+    CGFloat targetDistance = hypot(deltaX, deltaY);
+    if (targetDistance > MAX(420.0, self.cursorSize * 5.0)) {
+        _stickerDrawPoint = targetPoint;
+        _stickerWalkSpeed = 0;
+        _stickerWalkTilt = 0;
+        return;
+    }
+
+    CGFloat followAmount = 1.0 - exp(-deltaTime * 9.5);
+    NSPoint previousPoint = _stickerDrawPoint;
+    _stickerDrawPoint = NSMakePoint(_stickerDrawPoint.x + deltaX * followAmount,
+                                    _stickerDrawPoint.y + deltaY * followAmount);
+
+    CGFloat moveX = _stickerDrawPoint.x - previousPoint.x;
+    CGFloat moveY = _stickerDrawPoint.y - previousPoint.y;
+    CGFloat moveDistance = hypot(moveX, moveY);
+    _stickerWalkSpeed = moveDistance / deltaTime;
+
+    CGFloat strideLength = MAX(18.0, self.cursorSize * 0.42);
+    _stickerWalkPhase += (moveDistance / strideLength) * (CGFloat)M_PI;
+    if (_stickerWalkPhase > (CGFloat)M_PI * 200.0) {
+        _stickerWalkPhase = fmod(_stickerWalkPhase, (CGFloat)M_PI * 2.0);
+    }
+
+    CGFloat horizontalVelocity = moveX / deltaTime;
+    CGFloat targetTilt = MAX(-0.16, MIN(0.16, horizontalVelocity / 3200.0));
+    _stickerWalkTilt = _stickerWalkTilt * 0.72 + targetTilt * 0.28;
+}
+
+- (NSPoint)stickerAnchorPoint {
+    if (_stickerWalkFollowEnabled && self.stickerVisible && _hasStickerDrawPoint) {
+        return _stickerDrawPoint;
+    }
+    return self.cursorPoint;
+}
+
+- (NSPoint)trailAnchorPoint {
+    if (_stickerWalkFollowEnabled && self.stickerVisible && _hasStickerDrawPoint) {
+        return _stickerDrawPoint;
+    }
+    return self.cursorPoint;
+}
+
+- (void)applyStickerWalkPoseForRect:(NSRect)rect {
+    if (!_stickerWalkFollowEnabled || !self.stickerVisible) {
+        return;
+    }
+
+    CGFloat intensity = MIN(1.0, _stickerWalkSpeed / MAX(260.0, self.cursorSize * 5.0));
+    if (intensity < 0.015) {
+        return;
+    }
+
+    CGFloat step = sin(_stickerWalkPhase);
+    CGFloat landing = fabs(step);
+    CGFloat bob = step * self.cursorSize * 0.030 * intensity;
+    CGFloat squash = landing * 0.045 * intensity;
+    CGFloat stretch = squash * 0.42;
+
+    NSAffineTransform *transform = [NSAffineTransform transform];
+    [transform translateXBy:NSMidX(rect) yBy:NSMidY(rect) + bob];
+    [transform rotateByRadians:_stickerWalkTilt * intensity];
+    [transform scaleXBy:1.0 + stretch yBy:1.0 - squash];
+    [transform translateXBy:-NSMidX(rect) yBy:-NSMidY(rect)];
+    [transform concat];
+}
+
 - (void)addPulseAtPoint:(NSPoint)point {
     if (![self shouldDrawPulse]) {
         return;
@@ -416,11 +548,18 @@ static NSColor *CartoonColorFromHexString(NSString *hexString) {
     }
 
     if (self.image) {
-        [self drawCustomImage:self.image inRect:[self coverRectForImage:self.image]];
+        NSRect drawRect = [self coverRectForImage:self.image];
+        [NSGraphicsContext saveGraphicsState];
+        [self applyStickerWalkPoseForRect:drawRect];
+        [self drawCustomImage:self.image inRect:drawRect];
+        [NSGraphicsContext restoreGraphicsState];
     } else {
         CGFloat size = self.cursorSize;
         NSRect drawRect = [self coverRectForSize:NSMakeSize(size, size)];
+        [NSGraphicsContext saveGraphicsState];
+        [self applyStickerWalkPoseForRect:drawRect];
         [self drawDefaultCartoonInRect:drawRect];
+        [NSGraphicsContext restoreGraphicsState];
     }
 }
 
@@ -452,8 +591,9 @@ static NSColor *CartoonColorFromHexString(NSString *hexString) {
     CGFloat anchorX = 0.18;
     CGFloat anchorY = 0.82;
 
-    return NSMakeRect(round(self.cursorPoint.x - size.width * anchorX),
-                      round(self.cursorPoint.y - size.height * anchorY),
+    NSPoint anchorPoint = [self stickerAnchorPoint];
+    return NSMakeRect(round(anchorPoint.x - size.width * anchorX),
+                      round(anchorPoint.y - size.height * anchorY),
                       size.width,
                       size.height);
 }
@@ -1000,6 +1140,7 @@ static NSColor *CartoonColorFromHexString(NSString *hexString) {
 
 @interface CursorController : NSObject
 @property(nonatomic, assign, getter=isEnabled) BOOL enabled;
+@property(nonatomic, assign) BOOL stickerWalkFollowEnabled;
 @property(nonatomic, assign) BOOL nativeCursorEffectsEnabled;
 @property(nonatomic, assign) BOOL hideSystemCursor;
 @property(nonatomic, assign) BOOL virtualCursorEnabled;
@@ -1044,6 +1185,7 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     BOOL _virtualCursorActive;
     BOOL _needsAccessibilityPermission;
     BOOL _mouseCursorAssociated;
+    BOOL _stickerWalkFollowEnabled;
     BOOL _nativeCursorEffectsEnabled;
     CGPoint _virtualQuartzPoint;
     CursorEffectStyle _effectStyle;
@@ -1097,6 +1239,13 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
         _enabled = YES;
     } else {
         _enabled = [defaults boolForKey:DefaultsKeyEnabled];
+    }
+
+    if ([defaults objectForKey:DefaultsKeyStickerWalkFollow] == nil) {
+        _stickerWalkFollowEnabled = NO;
+        [defaults setBool:NO forKey:DefaultsKeyStickerWalkFollow];
+    } else {
+        _stickerWalkFollowEnabled = [defaults boolForKey:DefaultsKeyStickerWalkFollow];
     }
 
     NSInteger behaviorVersion = [defaults integerForKey:DefaultsKeyBehaviorVersion];
@@ -1247,6 +1396,18 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     [NSUserDefaults.standardUserDefaults setBool:enabled forKey:DefaultsKeyEnabled];
     [self applyVirtualCursorState];
     [self applyEnabledState];
+}
+
+- (BOOL)stickerWalkFollowEnabled {
+    return _stickerWalkFollowEnabled;
+}
+
+- (void)setStickerWalkFollowEnabled:(BOOL)stickerWalkFollowEnabled {
+    _stickerWalkFollowEnabled = stickerWalkFollowEnabled;
+    [NSUserDefaults.standardUserDefaults setBool:stickerWalkFollowEnabled forKey:DefaultsKeyStickerWalkFollow];
+    for (CursorView *view in _views) {
+        view.stickerWalkFollowEnabled = stickerWalkFollowEnabled;
+    }
 }
 
 - (BOOL)nativeCursorEffectsEnabled {
@@ -1479,6 +1640,7 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
         newView.cursorSize = self.cursorSize;
         newView.image = _customImage;
         newView.effectStyle = self.effectStyle;
+        newView.stickerWalkFollowEnabled = self.stickerWalkFollowEnabled;
         newView.customTrailColors = self.customTrailColors;
         newView.customClickColors = self.customClickColors;
         newView.customParticleColors = self.customParticleColors;
@@ -2561,6 +2723,13 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     enabledItem.state = _cursorController.isEnabled ? NSControlStateValueOn : NSControlStateValueOff;
     [menu addItem:enabledItem];
 
+    NSMenuItem *walkFollowItem = [[NSMenuItem alloc] initWithTitle:@"Sticker Walk Follow"
+                                                            action:@selector(toggleStickerWalkFollow:)
+                                                     keyEquivalent:@""];
+    walkFollowItem.target = self;
+    walkFollowItem.state = _cursorController.stickerWalkFollowEnabled ? NSControlStateValueOn : NSControlStateValueOff;
+    [menu addItem:walkFollowItem];
+
     NSMenuItem *nativeEffectsItem = [[NSMenuItem alloc] initWithTitle:@"Native Cursor Effects"
                                                                action:@selector(toggleNativeCursorEffects:)
                                                         keyEquivalent:@""];
@@ -2665,6 +2834,11 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
 
 - (void)toggleEnabled:(NSMenuItem *)sender {
     _cursorController.enabled = !_cursorController.isEnabled;
+    [self rebuildMenu];
+}
+
+- (void)toggleStickerWalkFollow:(NSMenuItem *)sender {
+    _cursorController.stickerWalkFollowEnabled = !_cursorController.stickerWalkFollowEnabled;
     [self rebuildMenu];
 }
 
