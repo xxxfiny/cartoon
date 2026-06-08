@@ -1759,14 +1759,12 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     NSStatusItem *_statusItem;
     NSPanel *_palettePanel;
     EffectColorRole _palettePanelRole;
-    NSArray<NSButton *> *_paletteColorButtons;
+    NSArray<NSImageView *> *_paletteColorSwatches;
     NSArray<NSTextField *> *_paletteHexFields;
+    NSArray<NSTextField *> *_paletteRedFields;
+    NSArray<NSTextField *> *_paletteGreenFields;
+    NSArray<NSTextField *> *_paletteBlueFields;
     NSArray<NSColor *> *_paletteDraftColors;
-    NSInteger _paletteActiveDraftIndex;
-    NSTextField *_paletteEditingLabel;
-    NSSlider *_paletteRedSlider;
-    NSSlider *_paletteGreenSlider;
-    NSSlider *_paletteBlueSlider;
     BOOL _updatingPaletteControls;
 }
 
@@ -1778,7 +1776,6 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
 
     _cursorController = [[CursorController alloc] init];
     _palettePanelRole = EffectColorRoleTrail;
-    _paletteActiveDraftIndex = -1;
     return self;
 }
 
@@ -1916,7 +1913,7 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     NSArray<NSColor *> *colors = [CursorView normalizedEffectColors:[self customColorsForRole:role]];
     _paletteDraftColors = colors;
 
-    NSRect frame = NSMakeRect(0, 0, 420, 390);
+    NSRect frame = NSMakeRect(0, 0, 440, 310);
     _palettePanel = [[NSPanel alloc] initWithContentRect:frame
                                                styleMask:NSWindowStyleMaskTitled |
                                                          NSWindowStyleMaskClosable |
@@ -1926,35 +1923,45 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     _palettePanel.title = [NSString stringWithFormat:@"%@ Palette", [self titleForEffectColorRole:role]];
     _palettePanel.releasedWhenClosed = NO;
     _palettePanel.level = NSFloatingWindowLevel;
-    _paletteActiveDraftIndex = 0;
 
     NSView *contentView = [[NSView alloc] initWithFrame:frame];
-    NSMutableArray<NSButton *> *colorButtons = [NSMutableArray array];
+    NSMutableArray<NSImageView *> *colorSwatches = [NSMutableArray array];
     NSMutableArray<NSTextField *> *hexFields = [NSMutableArray array];
+    NSMutableArray<NSTextField *> *redFields = [NSMutableArray array];
+    NSMutableArray<NSTextField *> *greenFields = [NSMutableArray array];
+    NSMutableArray<NSTextField *> *blueFields = [NSMutableArray array];
 
-    NSTextField *titleLabel = [NSTextField labelWithString:@"Edit all four colors, then apply together."];
-    titleLabel.frame = NSMakeRect(24, 354, 372, 20);
+    NSTextField *titleLabel = [NSTextField labelWithString:@"Edit each row independently, then apply together."];
+    titleLabel.frame = NSMakeRect(24, 274, 392, 20);
     titleLabel.textColor = NSColor.secondaryLabelColor;
     [contentView addSubview:titleLabel];
 
+    NSArray<NSDictionary *> *headers = @[
+        @{@"title": @"Hex", @"x": @154},
+        @{@"title": @"R", @"x": @274},
+        @{@"title": @"G", @"x": @326},
+        @{@"title": @"B", @"x": @378}
+    ];
+    for (NSDictionary *header in headers) {
+        NSTextField *label = [NSTextField labelWithString:header[@"title"]];
+        label.frame = NSMakeRect([header[@"x"] doubleValue], 244, 42, 18);
+        label.textColor = NSColor.secondaryLabelColor;
+        [contentView addSubview:label];
+    }
+
     for (NSInteger index = 0; index < 4; index++) {
-        CGFloat y = 306 - index * 42;
+        CGFloat y = 202 - index * 42;
         NSTextField *label = [NSTextField labelWithString:[NSString stringWithFormat:@"Color %ld", (long)index + 1]];
         label.frame = NSMakeRect(24, y + 5, 70, 20);
         [contentView addSubview:label];
 
-        NSButton *colorButton = [[NSButton alloc] initWithFrame:NSMakeRect(98, y, 46, 30)];
-        colorButton.image = [self swatchImageForColor:colors[index]];
-        colorButton.imagePosition = NSImageOnly;
-        colorButton.bezelStyle = NSBezelStyleRounded;
-        [colorButton setButtonType:NSButtonTypeToggle];
-        colorButton.tag = index;
-        colorButton.target = self;
-        colorButton.action = @selector(paletteSwatchButtonClicked:);
-        [contentView addSubview:colorButton];
-        [colorButtons addObject:colorButton];
+        NSImageView *swatch = [[NSImageView alloc] initWithFrame:NSMakeRect(98, y + 2, 30, 26)];
+        swatch.image = [self swatchImageForColor:colors[index]];
+        swatch.imageScaling = NSImageScaleNone;
+        [contentView addSubview:swatch];
+        [colorSwatches addObject:swatch];
 
-        NSTextField *hexField = [[NSTextField alloc] initWithFrame:NSMakeRect(158, y + 1, 126, 28)];
+        NSTextField *hexField = [[NSTextField alloc] initWithFrame:NSMakeRect(144, y + 1, 104, 28)];
         hexField.stringValue = CartoonHexStringFromColor(colors[index]);
         hexField.tag = index;
         hexField.target = self;
@@ -1962,88 +1969,51 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
         hexField.font = [NSFont monospacedSystemFontOfSize:13 weight:NSFontWeightRegular];
         [contentView addSubview:hexField];
         [hexFields addObject:hexField];
+
+        NSArray<NSNumber *> *channelXs = @[@268, @320, @372];
+        NSArray<NSMutableArray<NSTextField *> *> *channelFieldGroups = @[redFields, greenFields, blueFields];
+        for (NSInteger channel = 0; channel < 3; channel++) {
+            NSTextField *field = [[NSTextField alloc] initWithFrame:NSMakeRect(channelXs[channel].doubleValue, y + 1, 42, 28)];
+            field.tag = index * 3 + channel;
+            field.target = self;
+            field.action = @selector(paletteChannelFieldChanged:);
+            field.font = [NSFont monospacedSystemFontOfSize:13 weight:NSFontWeightRegular];
+            [contentView addSubview:field];
+            [channelFieldGroups[channel] addObject:field];
+        }
     }
-
-    _paletteEditingLabel = [NSTextField labelWithString:@"Editing Color 1"];
-    _paletteEditingLabel.frame = NSMakeRect(24, 142, 372, 20);
-    _paletteEditingLabel.textColor = NSColor.secondaryLabelColor;
-    [contentView addSubview:_paletteEditingLabel];
-
-    NSArray<NSString *> *sliderLabels = @[@"R", @"G", @"B"];
-    NSMutableArray<NSSlider *> *sliders = [NSMutableArray array];
-    for (NSInteger index = 0; index < 3; index++) {
-        CGFloat y = 102 - index * 32;
-        NSTextField *label = [NSTextField labelWithString:sliderLabels[index]];
-        label.frame = NSMakeRect(24, y + 2, 18, 20);
-        [contentView addSubview:label];
-
-        NSSlider *slider = [[NSSlider alloc] initWithFrame:NSMakeRect(50, y, 286, 24)];
-        slider.minValue = 0;
-        slider.maxValue = 255;
-        slider.target = self;
-        slider.action = @selector(paletteSliderChanged:);
-        slider.tag = index;
-        [contentView addSubview:slider];
-        [sliders addObject:slider];
-    }
-    _paletteRedSlider = sliders[0];
-    _paletteGreenSlider = sliders[1];
-    _paletteBlueSlider = sliders[2];
 
     NSButton *resetButton = [NSButton buttonWithTitle:@"Reset"
                                                target:self
                                                action:@selector(resetOpenPalettePanel:)];
-    resetButton.frame = NSMakeRect(24, 12, 90, 30);
+    resetButton.frame = NSMakeRect(24, 14, 90, 30);
     [contentView addSubview:resetButton];
 
     NSButton *cancelButton = [NSButton buttonWithTitle:@"Cancel"
                                               target:self
                                               action:@selector(closePalettePanel:)];
-    cancelButton.frame = NSMakeRect(246, 12, 90, 30);
+    cancelButton.frame = NSMakeRect(264, 14, 90, 30);
     [contentView addSubview:cancelButton];
 
     NSButton *applyButton = [NSButton buttonWithTitle:@"Apply"
                                                target:self
                                                action:@selector(applyPalettePanel:)];
-    applyButton.frame = NSMakeRect(340, 12, 72, 30);
+    applyButton.frame = NSMakeRect(358, 14, 72, 30);
     applyButton.keyEquivalent = @"\r";
     [contentView addSubview:applyButton];
 
-    _paletteColorButtons = colorButtons;
+    _paletteColorSwatches = colorSwatches;
     _paletteHexFields = hexFields;
+    _paletteRedFields = redFields;
+    _paletteGreenFields = greenFields;
+    _paletteBlueFields = blueFields;
     _palettePanel.contentView = contentView;
 
     [NSApp activateIgnoringOtherApps:YES];
     [_palettePanel center];
     [_palettePanel makeKeyAndOrderFront:nil];
-    [self updatePalettePanelControlsWithColors:colors updateSliders:YES];
+    [self updatePalettePanelControlsWithColors:colors];
     [self rebuildMenu];
-}
-
-- (void)paletteSwatchButtonClicked:(NSButton *)sender {
-    NSInteger index = sender.tag;
-    if (index < 0 || index >= 4) {
-        return;
-    }
-
-    _paletteActiveDraftIndex = index;
-    [self updatePalettePanelControlsWithColors:_paletteDraftColors updateSliders:YES];
-}
-
-- (void)paletteSliderChanged:(NSSlider *)sender {
-    if (_updatingPaletteControls || _paletteActiveDraftIndex < 0 || _paletteActiveDraftIndex >= 4) {
-        return;
-    }
-
-    CGFloat red = _paletteRedSlider.doubleValue / 255.0;
-    CGFloat green = _paletteGreenSlider.doubleValue / 255.0;
-    CGFloat blue = _paletteBlueSlider.doubleValue / 255.0;
-    NSColor *color = [NSColor colorWithCalibratedRed:red green:green blue:blue alpha:1.0];
-
-    NSMutableArray<NSColor *> *colors = [[CursorView normalizedEffectColors:_paletteDraftColors] mutableCopy];
-    colors[_paletteActiveDraftIndex] = color;
-    _paletteDraftColors = colors;
-    [self updatePalettePanelControlsWithColors:colors updateSliders:NO];
 }
 
 - (void)paletteHexFieldChanged:(NSTextField *)sender {
@@ -2067,15 +2037,52 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     NSMutableArray<NSColor *> *colors = [[CursorView normalizedEffectColors:_paletteDraftColors] mutableCopy];
     colors[index] = color;
     _paletteDraftColors = colors;
-    _paletteActiveDraftIndex = index;
-    [self updatePalettePanelControlsWithColors:colors updateSliders:YES];
+    [self updatePalettePanelControlsWithColors:colors];
+}
+
+- (void)paletteChannelFieldChanged:(NSTextField *)sender {
+    if (_updatingPaletteControls) {
+        return;
+    }
+
+    NSInteger index = sender.tag / 3;
+    NSInteger channel = sender.tag % 3;
+    if (index < 0 || index >= 4 || channel < 0 || channel >= 3) {
+        return;
+    }
+
+    NSInteger value = sender.integerValue;
+    if (value < 0 || value > 255) {
+        NSBeep();
+        [self updatePalettePanelControlsWithColors:_paletteDraftColors];
+        return;
+    }
+
+    NSMutableArray<NSColor *> *colors = [[CursorView normalizedEffectColors:_paletteDraftColors] mutableCopy];
+    NSColor *existingColor = CartoonColorUsingSRGB(colors[index]);
+    CGFloat red = 0;
+    CGFloat green = 0;
+    CGFloat blue = 0;
+    CGFloat alpha = 0;
+    [existingColor getRed:&red green:&green blue:&blue alpha:&alpha];
+
+    if (channel == 0) {
+        red = value / 255.0;
+    } else if (channel == 1) {
+        green = value / 255.0;
+    } else {
+        blue = value / 255.0;
+    }
+
+    colors[index] = [NSColor colorWithCalibratedRed:red green:green blue:blue alpha:1.0];
+    _paletteDraftColors = colors;
+    [self updatePalettePanelControlsWithColors:colors];
 }
 
 - (void)resetOpenPalettePanel:(NSButton *)sender {
     NSArray<NSColor *> *defaults = [CursorView defaultEffectColors];
     _paletteDraftColors = defaults;
-    _paletteActiveDraftIndex = 0;
-    [self updatePalettePanelControlsWithColors:defaults updateSliders:YES];
+    [self updatePalettePanelControlsWithColors:defaults];
 }
 
 - (void)closePalettePanel:(NSButton *)sender {
@@ -2090,38 +2097,35 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     [_palettePanel orderOut:nil];
 }
 
-- (void)updatePalettePanelControlsWithColors:(NSArray<NSColor *> *)colors updateSliders:(BOOL)updateSliders {
+- (void)updatePalettePanelControlsWithColors:(NSArray<NSColor *> *)colors {
     NSArray<NSColor *> *normalizedColors = [CursorView normalizedEffectColors:colors];
     _updatingPaletteControls = YES;
-    NSInteger activeIndex = _paletteActiveDraftIndex;
-    if (activeIndex < 0 || activeIndex >= 4) {
-        activeIndex = 0;
-        _paletteActiveDraftIndex = activeIndex;
-    }
 
     for (NSInteger index = 0; index < 4; index++) {
         NSColor *color = normalizedColors[index];
-        if (index < (NSInteger)_paletteColorButtons.count) {
-            _paletteColorButtons[index].image = [self swatchImageForColor:color];
-            _paletteColorButtons[index].state = index == activeIndex ? NSControlStateValueOn : NSControlStateValueOff;
+        if (index < (NSInteger)_paletteColorSwatches.count) {
+            _paletteColorSwatches[index].image = [self swatchImageForColor:color];
         }
         if (index < (NSInteger)_paletteHexFields.count) {
             _paletteHexFields[index].stringValue = CartoonHexStringFromColor(color);
         }
-    }
 
-    NSColor *activeColor = CartoonColorUsingSRGB(normalizedColors[activeIndex]);
-    CGFloat red = 0;
-    CGFloat green = 0;
-    CGFloat blue = 0;
-    CGFloat alpha = 0;
-    [activeColor getRed:&red green:&green blue:&blue alpha:&alpha];
-    if (updateSliders) {
-        _paletteRedSlider.doubleValue = red * 255.0;
-        _paletteGreenSlider.doubleValue = green * 255.0;
-        _paletteBlueSlider.doubleValue = blue * 255.0;
+        NSColor *rgbColor = CartoonColorUsingSRGB(color);
+        CGFloat red = 0;
+        CGFloat green = 0;
+        CGFloat blue = 0;
+        CGFloat alpha = 0;
+        [rgbColor getRed:&red green:&green blue:&blue alpha:&alpha];
+        if (index < (NSInteger)_paletteRedFields.count) {
+            _paletteRedFields[index].integerValue = (NSInteger)llround(red * 255.0);
+        }
+        if (index < (NSInteger)_paletteGreenFields.count) {
+            _paletteGreenFields[index].integerValue = (NSInteger)llround(green * 255.0);
+        }
+        if (index < (NSInteger)_paletteBlueFields.count) {
+            _paletteBlueFields[index].integerValue = (NSInteger)llround(blue * 255.0);
+        }
     }
-    _paletteEditingLabel.stringValue = [NSString stringWithFormat:@"Editing Color %ld %@", (long)activeIndex + 1, CartoonHexStringFromColor(activeColor)];
     _updatingPaletteControls = NO;
 }
 
