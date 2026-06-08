@@ -2048,10 +2048,7 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
         return NO;
     }
 
-    NSMutableArray<NSColor *> *colors = [[CursorView normalizedEffectColors:_paletteDraftColors] mutableCopy];
-    colors[index] = color;
-    _paletteDraftColors = colors;
-    [self updatePalettePanelControlsWithColors:colors preservingField:sender];
+    [self setPaletteDraftColor:color atIndex:index preservingField:sender];
     return YES;
 }
 
@@ -2086,7 +2083,7 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
         return NO;
     }
 
-    NSMutableArray<NSColor *> *colors = [[CursorView normalizedEffectColors:_paletteDraftColors] mutableCopy];
+    NSArray<NSColor *> *colors = [CursorView normalizedEffectColors:_paletteDraftColors];
     NSColor *existingColor = CartoonColorUsingSRGB(colors[index]);
     CGFloat red = 0;
     CGFloat green = 0;
@@ -2102,9 +2099,8 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
         blue = value / 255.0;
     }
 
-    colors[index] = [NSColor colorWithCalibratedRed:red green:green blue:blue alpha:1.0];
-    _paletteDraftColors = colors;
-    [self updatePalettePanelControlsWithColors:colors preservingField:sender];
+    NSColor *color = [NSColor colorWithCalibratedRed:red green:green blue:blue alpha:1.0];
+    [self setPaletteDraftColor:color atIndex:index preservingField:sender];
     return YES;
 }
 
@@ -2155,43 +2151,65 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     _updatingPaletteControls = YES;
 
     for (NSInteger index = 0; index < 4; index++) {
-        NSColor *color = normalizedColors[index];
-        if (index < (NSInteger)_paletteColorSwatches.count) {
-            _paletteColorSwatches[index].image = [self swatchImageForColor:color];
-        }
-        if (index < (NSInteger)_paletteHexFields.count) {
-            NSTextField *field = _paletteHexFields[index];
-            if (field != preservedField) {
-                field.stringValue = CartoonHexStringFromColor(color);
-            }
-        }
-
-        NSColor *rgbColor = CartoonColorUsingSRGB(color);
-        CGFloat red = 0;
-        CGFloat green = 0;
-        CGFloat blue = 0;
-        CGFloat alpha = 0;
-        [rgbColor getRed:&red green:&green blue:&blue alpha:&alpha];
-        if (index < (NSInteger)_paletteRedFields.count) {
-            NSTextField *field = _paletteRedFields[index];
-            if (field != preservedField) {
-                field.integerValue = (NSInteger)llround(red * 255.0);
-            }
-        }
-        if (index < (NSInteger)_paletteGreenFields.count) {
-            NSTextField *field = _paletteGreenFields[index];
-            if (field != preservedField) {
-                field.integerValue = (NSInteger)llround(green * 255.0);
-            }
-        }
-        if (index < (NSInteger)_paletteBlueFields.count) {
-            NSTextField *field = _paletteBlueFields[index];
-            if (field != preservedField) {
-                field.integerValue = (NSInteger)llround(blue * 255.0);
-            }
-        }
+        [self updatePaletteRowAtIndex:index color:normalizedColors[index] preservingField:preservedField];
     }
     _updatingPaletteControls = NO;
+}
+
+- (void)setPaletteDraftColor:(NSColor *)color atIndex:(NSInteger)index preservingField:(NSTextField *)preservedField {
+    if (index < 0 || index >= 4) {
+        return;
+    }
+
+    NSMutableArray<NSColor *> *colors = [[CursorView normalizedEffectColors:_paletteDraftColors] mutableCopy];
+    NSColor *normalizedColor = CartoonColorUsingSRGB(color);
+    colors[index] = normalizedColor;
+    _paletteDraftColors = colors;
+
+    _updatingPaletteControls = YES;
+    [self updatePaletteRowAtIndex:index color:normalizedColor preservingField:preservedField];
+    _updatingPaletteControls = NO;
+}
+
+- (void)updatePaletteRowAtIndex:(NSInteger)index color:(NSColor *)color preservingField:(NSTextField *)preservedField {
+    if (index < 0 || index >= 4) {
+        return;
+    }
+
+    if (index < (NSInteger)_paletteColorSwatches.count) {
+        _paletteColorSwatches[index].image = [self swatchImageForColor:color];
+    }
+    if (index < (NSInteger)_paletteHexFields.count) {
+        NSTextField *field = _paletteHexFields[index];
+        if (field != preservedField) {
+            field.stringValue = CartoonHexStringFromColor(color);
+        }
+    }
+
+    NSColor *rgbColor = CartoonColorUsingSRGB(color);
+    CGFloat red = 0;
+    CGFloat green = 0;
+    CGFloat blue = 0;
+    CGFloat alpha = 0;
+    [rgbColor getRed:&red green:&green blue:&blue alpha:&alpha];
+    if (index < (NSInteger)_paletteRedFields.count) {
+        NSTextField *field = _paletteRedFields[index];
+        if (field != preservedField) {
+            field.integerValue = (NSInteger)llround(red * 255.0);
+        }
+    }
+    if (index < (NSInteger)_paletteGreenFields.count) {
+        NSTextField *field = _paletteGreenFields[index];
+        if (field != preservedField) {
+            field.integerValue = (NSInteger)llround(green * 255.0);
+        }
+    }
+    if (index < (NSInteger)_paletteBlueFields.count) {
+        NSTextField *field = _paletteBlueFields[index];
+        if (field != preservedField) {
+            field.integerValue = (NSInteger)llround(blue * 255.0);
+        }
+    }
 }
 
 - (void)rebuildMenu {
