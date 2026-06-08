@@ -14,6 +14,7 @@ A tiny native macOS menu bar prototype that draws a cartoon cursor overlay that 
 - Trail, click, and sparkle palettes open in a compact editor window so all four colors can be edited together.
 - Palette editor changes are staged until Apply, so dragging the color picker does not immediately overwrite saved colors.
 - Palette rows use independent Hex/R/G/B inputs instead of shared color controls, so editing one row only changes that row.
+- Palette input updates the preview immediately; Apply saves the staged palette to the effect.
 - Optional native cursor effects mode for keeping the original macOS cursor while showing click/trail effects.
 - Effects sample accent colors from the selected sticker by default, including black/dark colors.
 - Sticker cover mode: custom images preserve their original aspect ratio, and the selected size is the maximum edge. The sticker is anchored near the system cursor tip to visually cover the native cursor.

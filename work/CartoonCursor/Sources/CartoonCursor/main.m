@@ -1751,7 +1751,7 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     return [controller handleEventTapWithType:type event:event];
 }
 
-@interface AppDelegate : NSObject <NSApplicationDelegate>
+@interface AppDelegate : NSObject <NSApplicationDelegate, NSTextFieldDelegate>
 @end
 
 @implementation AppDelegate {
@@ -1966,6 +1966,7 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
         hexField.tag = index;
         hexField.target = self;
         hexField.action = @selector(paletteHexFieldChanged:);
+        hexField.delegate = self;
         hexField.font = [NSFont monospacedSystemFontOfSize:13 weight:NSFontWeightRegular];
         [contentView addSubview:hexField];
         [hexFields addObject:hexField];
@@ -1977,6 +1978,7 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
             field.tag = index * 3 + channel;
             field.target = self;
             field.action = @selector(paletteChannelFieldChanged:);
+            field.delegate = self;
             field.font = [NSFont monospacedSystemFontOfSize:13 weight:NSFontWeightRegular];
             [contentView addSubview:field];
             [channelFieldGroups[channel] addObject:field];
@@ -2017,45 +2019,71 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
 }
 
 - (void)paletteHexFieldChanged:(NSTextField *)sender {
+    [self applyPaletteHexField:sender allowPartial:NO];
+}
+
+- (BOOL)applyPaletteHexField:(NSTextField *)sender allowPartial:(BOOL)allowPartial {
     if (_updatingPaletteControls) {
-        return;
+        return NO;
     }
 
     NSInteger index = sender.tag;
     if (index < 0 || index >= 4) {
-        return;
+        return NO;
     }
 
-    NSColor *color = CartoonColorFromHexString(sender.stringValue);
+    NSString *trimmed = [sender.stringValue stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    NSInteger hexLength = [trimmed hasPrefix:@"#"] ? trimmed.length - 1 : trimmed.length;
+    if (allowPartial && hexLength != 6) {
+        return NO;
+    }
+
+    NSColor *color = CartoonColorFromHexString(trimmed);
     if (!color) {
-        NSBeep();
-        NSArray<NSColor *> *colors = [CursorView normalizedEffectColors:_paletteDraftColors];
-        sender.stringValue = CartoonHexStringFromColor(colors[index]);
-        return;
+        if (!allowPartial) {
+            NSBeep();
+            NSArray<NSColor *> *colors = [CursorView normalizedEffectColors:_paletteDraftColors];
+            sender.stringValue = CartoonHexStringFromColor(colors[index]);
+        }
+        return NO;
     }
 
     NSMutableArray<NSColor *> *colors = [[CursorView normalizedEffectColors:_paletteDraftColors] mutableCopy];
     colors[index] = color;
     _paletteDraftColors = colors;
-    [self updatePalettePanelControlsWithColors:colors];
+    [self updatePalettePanelControlsWithColors:colors preservingField:sender];
+    return YES;
 }
 
 - (void)paletteChannelFieldChanged:(NSTextField *)sender {
+    [self applyPaletteChannelField:sender allowPartial:NO];
+}
+
+- (BOOL)applyPaletteChannelField:(NSTextField *)sender allowPartial:(BOOL)allowPartial {
     if (_updatingPaletteControls) {
-        return;
+        return NO;
     }
 
     NSInteger index = sender.tag / 3;
     NSInteger channel = sender.tag % 3;
     if (index < 0 || index >= 4 || channel < 0 || channel >= 3) {
-        return;
+        return NO;
     }
 
-    NSInteger value = sender.integerValue;
-    if (value < 0 || value > 255) {
-        NSBeep();
-        [self updatePalettePanelControlsWithColors:_paletteDraftColors];
-        return;
+    NSString *trimmed = [sender.stringValue stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if (allowPartial && trimmed.length == 0) {
+        return NO;
+    }
+
+    NSScanner *scanner = [NSScanner scannerWithString:trimmed];
+    NSInteger value = 0;
+    BOOL didScan = [scanner scanInteger:&value] && scanner.isAtEnd;
+    if (!didScan || value < 0 || value > 255) {
+        if (!allowPartial) {
+            NSBeep();
+            [self updatePalettePanelControlsWithColors:_paletteDraftColors];
+        }
+        return NO;
     }
 
     NSMutableArray<NSColor *> *colors = [[CursorView normalizedEffectColors:_paletteDraftColors] mutableCopy];
@@ -2076,7 +2104,28 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
 
     colors[index] = [NSColor colorWithCalibratedRed:red green:green blue:blue alpha:1.0];
     _paletteDraftColors = colors;
-    [self updatePalettePanelControlsWithColors:colors];
+    [self updatePalettePanelControlsWithColors:colors preservingField:sender];
+    return YES;
+}
+
+- (void)controlTextDidChange:(NSNotification *)notification {
+    id object = notification.object;
+    if (![object isKindOfClass:NSTextField.class]) {
+        return;
+    }
+
+    NSTextField *field = object;
+    if ([_paletteHexFields containsObject:field]) {
+        [self applyPaletteHexField:field allowPartial:YES];
+        return;
+    }
+
+    if ([_paletteRedFields containsObject:field] ||
+        [_paletteGreenFields containsObject:field] ||
+        [_paletteBlueFields containsObject:field]) {
+        [self applyPaletteChannelField:field allowPartial:YES];
+        return;
+    }
 }
 
 - (void)resetOpenPalettePanel:(NSButton *)sender {
@@ -2098,6 +2147,10 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
 }
 
 - (void)updatePalettePanelControlsWithColors:(NSArray<NSColor *> *)colors {
+    [self updatePalettePanelControlsWithColors:colors preservingField:nil];
+}
+
+- (void)updatePalettePanelControlsWithColors:(NSArray<NSColor *> *)colors preservingField:(NSTextField *)preservedField {
     NSArray<NSColor *> *normalizedColors = [CursorView normalizedEffectColors:colors];
     _updatingPaletteControls = YES;
 
@@ -2107,7 +2160,10 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
             _paletteColorSwatches[index].image = [self swatchImageForColor:color];
         }
         if (index < (NSInteger)_paletteHexFields.count) {
-            _paletteHexFields[index].stringValue = CartoonHexStringFromColor(color);
+            NSTextField *field = _paletteHexFields[index];
+            if (field != preservedField) {
+                field.stringValue = CartoonHexStringFromColor(color);
+            }
         }
 
         NSColor *rgbColor = CartoonColorUsingSRGB(color);
@@ -2117,13 +2173,22 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
         CGFloat alpha = 0;
         [rgbColor getRed:&red green:&green blue:&blue alpha:&alpha];
         if (index < (NSInteger)_paletteRedFields.count) {
-            _paletteRedFields[index].integerValue = (NSInteger)llround(red * 255.0);
+            NSTextField *field = _paletteRedFields[index];
+            if (field != preservedField) {
+                field.integerValue = (NSInteger)llround(red * 255.0);
+            }
         }
         if (index < (NSInteger)_paletteGreenFields.count) {
-            _paletteGreenFields[index].integerValue = (NSInteger)llround(green * 255.0);
+            NSTextField *field = _paletteGreenFields[index];
+            if (field != preservedField) {
+                field.integerValue = (NSInteger)llround(green * 255.0);
+            }
         }
         if (index < (NSInteger)_paletteBlueFields.count) {
-            _paletteBlueFields[index].integerValue = (NSInteger)llround(blue * 255.0);
+            NSTextField *field = _paletteBlueFields[index];
+            if (field != preservedField) {
+                field.integerValue = (NSInteger)llround(blue * 255.0);
+            }
         }
     }
     _updatingPaletteControls = NO;

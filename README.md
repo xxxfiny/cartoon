@@ -19,6 +19,7 @@ Each custom palette has four independent color slots that are cycled across that
 Palette groups open in a compact editor window so all four colors can be edited together.
 Palette editor changes are staged until Apply, so color picker drags do not immediately overwrite saved colors.
 Palette rows use independent Hex/R/G/B inputs, so editing one row only changes that row.
+Palette input updates the preview immediately; Apply saves the staged palette to the effect.
 
 ## Sticker Cutout Helpers
 
