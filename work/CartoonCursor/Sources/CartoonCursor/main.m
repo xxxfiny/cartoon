@@ -2016,7 +2016,7 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     [NSApp activateIgnoringOtherApps:YES];
     [_palettePanel center];
     [_palettePanel makeKeyAndOrderFront:nil];
-    [self updatePalettePanelControlsWithColors:colors];
+    [self updatePalettePanelControlsWithColors:colors updateSliders:YES];
     [self rebuildMenu];
 }
 
@@ -2027,7 +2027,7 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     }
 
     _paletteActiveDraftIndex = index;
-    [self updatePalettePanelControlsWithColors:_paletteDraftColors];
+    [self updatePalettePanelControlsWithColors:_paletteDraftColors updateSliders:YES];
 }
 
 - (void)paletteSliderChanged:(NSSlider *)sender {
@@ -2043,7 +2043,7 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     NSMutableArray<NSColor *> *colors = [[CursorView normalizedEffectColors:_paletteDraftColors] mutableCopy];
     colors[_paletteActiveDraftIndex] = color;
     _paletteDraftColors = colors;
-    [self updatePalettePanelControlsWithColors:colors];
+    [self updatePalettePanelControlsWithColors:colors updateSliders:NO];
 }
 
 - (void)paletteHexFieldChanged:(NSTextField *)sender {
@@ -2068,14 +2068,14 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     colors[index] = color;
     _paletteDraftColors = colors;
     _paletteActiveDraftIndex = index;
-    [self updatePalettePanelControlsWithColors:colors];
+    [self updatePalettePanelControlsWithColors:colors updateSliders:YES];
 }
 
 - (void)resetOpenPalettePanel:(NSButton *)sender {
     NSArray<NSColor *> *defaults = [CursorView defaultEffectColors];
     _paletteDraftColors = defaults;
     _paletteActiveDraftIndex = 0;
-    [self updatePalettePanelControlsWithColors:defaults];
+    [self updatePalettePanelControlsWithColors:defaults updateSliders:YES];
 }
 
 - (void)closePalettePanel:(NSButton *)sender {
@@ -2090,7 +2090,7 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     [_palettePanel orderOut:nil];
 }
 
-- (void)updatePalettePanelControlsWithColors:(NSArray<NSColor *> *)colors {
+- (void)updatePalettePanelControlsWithColors:(NSArray<NSColor *> *)colors updateSliders:(BOOL)updateSliders {
     NSArray<NSColor *> *normalizedColors = [CursorView normalizedEffectColors:colors];
     _updatingPaletteControls = YES;
     NSInteger activeIndex = _paletteActiveDraftIndex;
@@ -2116,9 +2116,11 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     CGFloat blue = 0;
     CGFloat alpha = 0;
     [activeColor getRed:&red green:&green blue:&blue alpha:&alpha];
-    _paletteRedSlider.doubleValue = red * 255.0;
-    _paletteGreenSlider.doubleValue = green * 255.0;
-    _paletteBlueSlider.doubleValue = blue * 255.0;
+    if (updateSliders) {
+        _paletteRedSlider.doubleValue = red * 255.0;
+        _paletteGreenSlider.doubleValue = green * 255.0;
+        _paletteBlueSlider.doubleValue = blue * 255.0;
+    }
     _paletteEditingLabel.stringValue = [NSString stringWithFormat:@"Editing Color %ld %@", (long)activeIndex + 1, CartoonHexStringFromColor(activeColor)];
     _updatingPaletteControls = NO;
 }
