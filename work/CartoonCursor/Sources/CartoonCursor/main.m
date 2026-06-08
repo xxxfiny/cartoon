@@ -1759,9 +1759,10 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     NSStatusItem *_statusItem;
     NSPanel *_palettePanel;
     EffectColorRole _palettePanelRole;
-    NSArray<NSColorWell *> *_paletteColorWells;
+    NSArray<NSButton *> *_paletteColorButtons;
     NSArray<NSTextField *> *_paletteHexFields;
     NSArray<NSColor *> *_paletteDraftColors;
+    NSInteger _paletteActiveDraftIndex;
     BOOL _updatingPaletteControls;
 }
 
@@ -1773,6 +1774,7 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
 
     _cursorController = [[CursorController alloc] init];
     _palettePanelRole = EffectColorRoleTrail;
+    _paletteActiveDraftIndex = -1;
     return self;
 }
 
@@ -1920,9 +1922,10 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     _palettePanel.title = [NSString stringWithFormat:@"%@ Palette", [self titleForEffectColorRole:role]];
     _palettePanel.releasedWhenClosed = NO;
     _palettePanel.level = NSFloatingWindowLevel;
+    _paletteActiveDraftIndex = -1;
 
     NSView *contentView = [[NSView alloc] initWithFrame:frame];
-    NSMutableArray<NSColorWell *> *colorWells = [NSMutableArray array];
+    NSMutableArray<NSButton *> *colorButtons = [NSMutableArray array];
     NSMutableArray<NSTextField *> *hexFields = [NSMutableArray array];
 
     NSTextField *titleLabel = [NSTextField labelWithString:@"Edit all four colors, then apply together."];
@@ -1936,13 +1939,15 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
         label.frame = NSMakeRect(24, y + 5, 70, 20);
         [contentView addSubview:label];
 
-        NSColorWell *colorWell = [[NSColorWell alloc] initWithFrame:NSMakeRect(98, y, 46, 30)];
-        colorWell.color = colors[index];
-        colorWell.tag = index;
-        colorWell.target = self;
-        colorWell.action = @selector(paletteColorWellChanged:);
-        [contentView addSubview:colorWell];
-        [colorWells addObject:colorWell];
+        NSButton *colorButton = [[NSButton alloc] initWithFrame:NSMakeRect(98, y, 46, 30)];
+        colorButton.image = [self swatchImageForColor:colors[index]];
+        colorButton.imagePosition = NSImageOnly;
+        colorButton.bezelStyle = NSBezelStyleRounded;
+        colorButton.tag = index;
+        colorButton.target = self;
+        colorButton.action = @selector(paletteSwatchButtonClicked:);
+        [contentView addSubview:colorButton];
+        [colorButtons addObject:colorButton];
 
         NSTextField *hexField = [[NSTextField alloc] initWithFrame:NSMakeRect(158, y + 1, 116, 28)];
         hexField.stringValue = CartoonHexStringFromColor(colors[index]);
@@ -1973,7 +1978,7 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     applyButton.keyEquivalent = @"\r";
     [contentView addSubview:applyButton];
 
-    _paletteColorWells = colorWells;
+    _paletteColorButtons = colorButtons;
     _paletteHexFields = hexFields;
     _palettePanel.contentView = contentView;
 
@@ -1983,18 +1988,31 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     [self rebuildMenu];
 }
 
-- (void)paletteColorWellChanged:(NSColorWell *)sender {
-    if (_updatingPaletteControls) {
-        return;
-    }
-
+- (void)paletteSwatchButtonClicked:(NSButton *)sender {
     NSInteger index = sender.tag;
     if (index < 0 || index >= 4) {
         return;
     }
 
+    _paletteActiveDraftIndex = index;
+    NSArray<NSColor *> *colors = [CursorView normalizedEffectColors:_paletteDraftColors];
+    NSColorPanel *panel = NSColorPanel.sharedColorPanel;
+    panel.showsAlpha = NO;
+    [panel setTarget:nil];
+    [panel setAction:NULL];
+    panel.color = colors[index];
+    [panel setTarget:self];
+    [panel setAction:@selector(paletteColorPanelChanged:)];
+    [panel makeKeyAndOrderFront:nil];
+}
+
+- (void)paletteColorPanelChanged:(NSColorPanel *)sender {
+    if (_updatingPaletteControls || _paletteActiveDraftIndex < 0 || _paletteActiveDraftIndex >= 4) {
+        return;
+    }
+
     NSMutableArray<NSColor *> *colors = [[CursorView normalizedEffectColors:_paletteDraftColors] mutableCopy];
-    colors[index] = CartoonColorUsingSRGB(sender.color);
+    colors[_paletteActiveDraftIndex] = CartoonColorUsingSRGB(sender.color);
     _paletteDraftColors = colors;
     [self updatePalettePanelControlsWithColors:colors];
 }
@@ -2026,10 +2044,14 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
 - (void)resetOpenPalettePanel:(NSButton *)sender {
     NSArray<NSColor *> *defaults = [CursorView defaultEffectColors];
     _paletteDraftColors = defaults;
+    _paletteActiveDraftIndex = -1;
     [self updatePalettePanelControlsWithColors:defaults];
 }
 
 - (void)closePalettePanel:(NSButton *)sender {
+    [NSColorPanel.sharedColorPanel setTarget:nil];
+    [NSColorPanel.sharedColorPanel setAction:NULL];
+    _paletteActiveDraftIndex = -1;
     [_palettePanel orderOut:nil];
 }
 
@@ -2038,6 +2060,9 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     NSArray<NSColor *> *colors = [CursorView normalizedEffectColors:_paletteDraftColors];
     [self setCustomColors:colors forRole:_palettePanelRole];
     [self rebuildMenu];
+    [NSColorPanel.sharedColorPanel setTarget:nil];
+    [NSColorPanel.sharedColorPanel setAction:NULL];
+    _paletteActiveDraftIndex = -1;
     [_palettePanel orderOut:nil];
 }
 
@@ -2046,8 +2071,8 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     _updatingPaletteControls = YES;
     for (NSInteger index = 0; index < 4; index++) {
         NSColor *color = normalizedColors[index];
-        if (index < (NSInteger)_paletteColorWells.count) {
-            _paletteColorWells[index].color = color;
+        if (index < (NSInteger)_paletteColorButtons.count) {
+            _paletteColorButtons[index].image = [self swatchImageForColor:color];
         }
         if (index < (NSInteger)_paletteHexFields.count) {
             _paletteHexFields[index].stringValue = CartoonHexStringFromColor(color);

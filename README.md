@@ -18,6 +18,7 @@ Effect colors can be sampled from the selected sticker automatically or set with
 Each custom palette has four independent color slots that are cycled across that effect's particles.
 Palette groups open in a compact editor window so all four colors can be edited together.
 Palette editor changes are staged until Apply, so color picker drags do not immediately overwrite saved colors.
+Palette swatches use independent buttons, so editing one slot only changes that slot.
 
 ## Sticker Cutout Helpers
 
