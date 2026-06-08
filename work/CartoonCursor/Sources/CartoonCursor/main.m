@@ -1757,8 +1757,10 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
 @implementation AppDelegate {
     CursorController *_cursorController;
     NSStatusItem *_statusItem;
-    EffectColorRole _editingPaletteRole;
-    NSInteger _editingPaletteIndex;
+    NSPanel *_palettePanel;
+    EffectColorRole _palettePanelRole;
+    NSArray<NSColorWell *> *_paletteColorWells;
+    NSArray<NSTextField *> *_paletteHexFields;
 }
 
 - (instancetype)init {
@@ -1768,8 +1770,7 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     }
 
     _cursorController = [[CursorController alloc] init];
-    _editingPaletteRole = EffectColorRoleTrail;
-    _editingPaletteIndex = -1;
+    _palettePanelRole = EffectColorRoleTrail;
     return self;
 }
 
@@ -1866,39 +1867,12 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
 }
 
 - (NSMenuItem *)effectColorMenuItemForRole:(EffectColorRole)role {
-    NSMenuItem *roleItem = [[NSMenuItem alloc] initWithTitle:[self titleForEffectColorRole:role]
-                                                      action:nil
+    NSString *title = [NSString stringWithFormat:@"%@...", [self titleForEffectColorRole:role]];
+    NSMenuItem *roleItem = [[NSMenuItem alloc] initWithTitle:title
+                                                      action:@selector(showEffectColorEditor:)
                                                keyEquivalent:@""];
-    NSMenu *roleMenu = [[NSMenu alloc] init];
-    NSArray<NSColor *> *customColors = [self customColorsForRole:role];
-    NSArray<NSColor *> *defaultColors = [CursorView defaultEffectColors];
-
-    for (NSInteger index = 0; index < 4; index++) {
-        NSColor *color = index < (NSInteger)customColors.count ? customColors[index] : defaultColors[index];
-        NSString *title = [NSString stringWithFormat:@"Color %ld %@", (long)index + 1, CartoonHexStringFromColor(color)];
-        NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:title
-                                                      action:@selector(editCustomEffectColor:)
-                                               keyEquivalent:@""];
-        item.target = self;
-        item.representedObject = @{
-            @"role": @(role),
-            @"index": @(index)
-        };
-        item.image = [self swatchImageForColor:color];
-        [roleMenu addItem:item];
-    }
-
-    [roleMenu addItem:NSMenuItem.separatorItem];
-
-    NSString *resetTitle = [NSString stringWithFormat:@"Reset %@", [self titleForEffectColorRole:role]];
-    NSMenuItem *resetItem = [[NSMenuItem alloc] initWithTitle:resetTitle
-                                                       action:@selector(resetCustomEffectColors:)
-                                                keyEquivalent:@""];
-    resetItem.target = self;
-    resetItem.representedObject = @(role);
-    [roleMenu addItem:resetItem];
-
-    roleItem.submenu = roleMenu;
+    roleItem.target = self;
+    roleItem.representedObject = @(role);
     return roleItem;
 }
 
@@ -1918,6 +1892,148 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     [image unlockFocus];
     image.template = NO;
     return image;
+}
+
+- (void)showEffectColorEditor:(NSMenuItem *)sender {
+    NSNumber *roleNumber = sender.representedObject;
+    if (![roleNumber isKindOfClass:NSNumber.class]) {
+        return;
+    }
+
+    [self showPalettePanelForRole:roleNumber.integerValue];
+}
+
+- (void)showPalettePanelForRole:(EffectColorRole)role {
+    _palettePanelRole = role;
+    _cursorController.effectColorMode = EffectColorModeCustom;
+    NSArray<NSColor *> *colors = [CursorView normalizedEffectColors:[self customColorsForRole:role]];
+
+    NSRect frame = NSMakeRect(0, 0, 360, 254);
+    _palettePanel = [[NSPanel alloc] initWithContentRect:frame
+                                               styleMask:NSWindowStyleMaskTitled |
+                                                         NSWindowStyleMaskClosable |
+                                                         NSWindowStyleMaskUtilityWindow
+                                                 backing:NSBackingStoreBuffered
+                                                   defer:NO];
+    _palettePanel.title = [NSString stringWithFormat:@"%@ Palette", [self titleForEffectColorRole:role]];
+    _palettePanel.releasedWhenClosed = NO;
+    _palettePanel.level = NSFloatingWindowLevel;
+
+    NSView *contentView = [[NSView alloc] initWithFrame:frame];
+    NSMutableArray<NSColorWell *> *colorWells = [NSMutableArray array];
+    NSMutableArray<NSTextField *> *hexFields = [NSMutableArray array];
+
+    NSTextField *titleLabel = [NSTextField labelWithString:@"Set all four colors for this effect."];
+    titleLabel.frame = NSMakeRect(24, 214, 312, 20);
+    titleLabel.textColor = NSColor.secondaryLabelColor;
+    [contentView addSubview:titleLabel];
+
+    for (NSInteger index = 0; index < 4; index++) {
+        CGFloat y = 166 - index * 42;
+        NSTextField *label = [NSTextField labelWithString:[NSString stringWithFormat:@"Color %ld", (long)index + 1]];
+        label.frame = NSMakeRect(24, y + 5, 70, 20);
+        [contentView addSubview:label];
+
+        NSColorWell *colorWell = [[NSColorWell alloc] initWithFrame:NSMakeRect(98, y, 46, 30)];
+        colorWell.color = colors[index];
+        colorWell.tag = index;
+        colorWell.target = self;
+        colorWell.action = @selector(paletteColorWellChanged:);
+        [contentView addSubview:colorWell];
+        [colorWells addObject:colorWell];
+
+        NSTextField *hexField = [[NSTextField alloc] initWithFrame:NSMakeRect(158, y + 1, 116, 28)];
+        hexField.stringValue = CartoonHexStringFromColor(colors[index]);
+        hexField.tag = index;
+        hexField.target = self;
+        hexField.action = @selector(paletteHexFieldChanged:);
+        hexField.font = [NSFont monospacedSystemFontOfSize:13 weight:NSFontWeightRegular];
+        [contentView addSubview:hexField];
+        [hexFields addObject:hexField];
+    }
+
+    NSButton *resetButton = [NSButton buttonWithTitle:@"Reset"
+                                               target:self
+                                               action:@selector(resetOpenPalettePanel:)];
+    resetButton.frame = NSMakeRect(24, 20, 90, 30);
+    [contentView addSubview:resetButton];
+
+    NSButton *doneButton = [NSButton buttonWithTitle:@"Done"
+                                              target:self
+                                              action:@selector(closePalettePanel:)];
+    doneButton.frame = NSMakeRect(246, 20, 90, 30);
+    doneButton.keyEquivalent = @"\r";
+    [contentView addSubview:doneButton];
+
+    _paletteColorWells = colorWells;
+    _paletteHexFields = hexFields;
+    _palettePanel.contentView = contentView;
+
+    [NSApp activateIgnoringOtherApps:YES];
+    [_palettePanel center];
+    [_palettePanel makeKeyAndOrderFront:nil];
+    [self rebuildMenu];
+}
+
+- (void)paletteColorWellChanged:(NSColorWell *)sender {
+    NSInteger index = sender.tag;
+    if (index < 0 || index >= 4) {
+        return;
+    }
+
+    NSMutableArray<NSColor *> *colors = [[CursorView normalizedEffectColors:[self customColorsForRole:_palettePanelRole]] mutableCopy];
+    colors[index] = CartoonColorUsingSRGB(sender.color);
+    _cursorController.effectColorMode = EffectColorModeCustom;
+    [self setCustomColors:colors forRole:_palettePanelRole];
+    [self updatePalettePanelControlsWithColors:colors];
+    [self rebuildMenu];
+}
+
+- (void)paletteHexFieldChanged:(NSTextField *)sender {
+    NSInteger index = sender.tag;
+    if (index < 0 || index >= 4) {
+        return;
+    }
+
+    NSColor *color = CartoonColorFromHexString(sender.stringValue);
+    if (!color) {
+        NSBeep();
+        NSArray<NSColor *> *colors = [CursorView normalizedEffectColors:[self customColorsForRole:_palettePanelRole]];
+        sender.stringValue = CartoonHexStringFromColor(colors[index]);
+        return;
+    }
+
+    NSMutableArray<NSColor *> *colors = [[CursorView normalizedEffectColors:[self customColorsForRole:_palettePanelRole]] mutableCopy];
+    colors[index] = color;
+    _cursorController.effectColorMode = EffectColorModeCustom;
+    [self setCustomColors:colors forRole:_palettePanelRole];
+    [self updatePalettePanelControlsWithColors:colors];
+    [self rebuildMenu];
+}
+
+- (void)resetOpenPalettePanel:(NSButton *)sender {
+    _cursorController.effectColorMode = EffectColorModeCustom;
+    NSArray<NSColor *> *defaults = [CursorView defaultEffectColors];
+    [self setCustomColors:defaults forRole:_palettePanelRole];
+    [self updatePalettePanelControlsWithColors:defaults];
+    [self rebuildMenu];
+}
+
+- (void)closePalettePanel:(NSButton *)sender {
+    [_palettePanel orderOut:nil];
+}
+
+- (void)updatePalettePanelControlsWithColors:(NSArray<NSColor *> *)colors {
+    NSArray<NSColor *> *normalizedColors = [CursorView normalizedEffectColors:colors];
+    for (NSInteger index = 0; index < 4; index++) {
+        NSColor *color = normalizedColors[index];
+        if (index < (NSInteger)_paletteColorWells.count) {
+            _paletteColorWells[index].color = color;
+        }
+        if (index < (NSInteger)_paletteHexFields.count) {
+            _paletteHexFields[index].stringValue = CartoonHexStringFromColor(color);
+        }
+    }
 }
 
 - (void)rebuildMenu {
@@ -2122,67 +2238,6 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     }
 
     _cursorController.effectColorMode = mode.integerValue;
-    [self rebuildMenu];
-}
-
-- (void)editCustomEffectColor:(NSMenuItem *)sender {
-    NSDictionary *payload = sender.representedObject;
-    if (![payload isKindOfClass:NSDictionary.class]) {
-        return;
-    }
-
-    NSNumber *roleNumber = payload[@"role"];
-    NSNumber *indexNumber = payload[@"index"];
-    if (![roleNumber isKindOfClass:NSNumber.class] || ![indexNumber isKindOfClass:NSNumber.class]) {
-        return;
-    }
-
-    EffectColorRole role = roleNumber.integerValue;
-    NSInteger index = indexNumber.integerValue;
-    if (index < 0 || index >= 4) {
-        return;
-    }
-
-    _cursorController.effectColorMode = EffectColorModeCustom;
-    NSArray<NSColor *> *colors = [self customColorsForRole:role];
-    NSArray<NSColor *> *defaultColors = [CursorView defaultEffectColors];
-    NSColor *color = index < (NSInteger)colors.count ? colors[index] : defaultColors[index];
-
-    [NSApp activateIgnoringOtherApps:YES];
-    NSColorPanel *panel = NSColorPanel.sharedColorPanel;
-    panel.showsAlpha = NO;
-    [panel setTarget:nil];
-    [panel setAction:NULL];
-    panel.color = CartoonColorUsingSRGB(color);
-
-    _editingPaletteRole = role;
-    _editingPaletteIndex = index;
-    [panel setTarget:self];
-    [panel setAction:@selector(customEffectColorChanged:)];
-    [panel makeKeyAndOrderFront:nil];
-    [self rebuildMenu];
-}
-
-- (void)customEffectColorChanged:(NSColorPanel *)sender {
-    if (_editingPaletteIndex < 0 || _editingPaletteIndex >= 4) {
-        return;
-    }
-
-    NSMutableArray<NSColor *> *colors = [[CursorView normalizedEffectColors:[self customColorsForRole:_editingPaletteRole]] mutableCopy];
-    colors[_editingPaletteIndex] = CartoonColorUsingSRGB(sender.color);
-    _cursorController.effectColorMode = EffectColorModeCustom;
-    [self setCustomColors:colors forRole:_editingPaletteRole];
-    [self rebuildMenu];
-}
-
-- (void)resetCustomEffectColors:(NSMenuItem *)sender {
-    NSNumber *roleNumber = sender.representedObject;
-    if (![roleNumber isKindOfClass:NSNumber.class]) {
-        return;
-    }
-
-    _cursorController.effectColorMode = EffectColorModeCustom;
-    [self setCustomColors:[CursorView defaultEffectColors] forRole:roleNumber.integerValue];
     [self rebuildMenu];
 }
 
