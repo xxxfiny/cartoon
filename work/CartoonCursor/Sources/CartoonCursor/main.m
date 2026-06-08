@@ -6,6 +6,7 @@
 
 static NSString * const DefaultsKeyEnabled = @"enabled";
 static NSString * const DefaultsKeyStickerWalkFollow = @"stickerWalkFollow";
+static NSString * const DefaultsKeyStickerWalkSpeed = @"stickerWalkSpeed";
 static NSString * const DefaultsKeyHideSystemCursor = @"hideSystemCursor";
 static NSString * const DefaultsKeyCursorSize = @"cursorSize";
 static NSString * const DefaultsKeyImagePath = @"imagePath";
@@ -25,6 +26,7 @@ static NSString * const DefaultsKeyBehaviorVersion = @"behaviorVersion";
 static const NSInteger CurrentBehaviorVersion = 6;
 static const NSTimeInterval CursorSuppressionInterval = 0.05;
 static const CGFloat DefaultCoverCursorSize = 160.0;
+static const CGFloat DefaultStickerWalkSpeed = 1.0;
 
 typedef NS_ENUM(NSInteger, CursorEffectStyle) {
     CursorEffectStyleOff = 0,
@@ -100,6 +102,13 @@ static NSColor *CartoonColorFromHexString(NSString *hexString) {
     return [NSColor colorWithCalibratedRed:red green:green blue:blue alpha:1.0];
 }
 
+static CGFloat CartoonClampedStickerWalkSpeed(CGFloat speed) {
+    if (!isfinite(speed) || speed <= 0) {
+        return DefaultStickerWalkSpeed;
+    }
+    return MAX(0.45, MIN(2.2, speed));
+}
+
 @interface OverlayWindow : NSWindow
 - (instancetype)initWithFrame:(NSRect)frame;
 @end
@@ -163,6 +172,7 @@ static NSColor *CartoonColorFromHexString(NSString *hexString) {
 @property(nonatomic, assign) BOOL cursorVisible;
 @property(nonatomic, assign) BOOL stickerVisible;
 @property(nonatomic, assign) BOOL stickerWalkFollowEnabled;
+@property(nonatomic, assign) CGFloat stickerWalkSpeedMultiplier;
 @property(nonatomic, assign) CursorEffectStyle effectStyle;
 @property(nonatomic, assign) EffectColorMode effectColorMode;
 @property(nonatomic, assign) BOOL nativeCursorEffectsEnabled;
@@ -205,6 +215,7 @@ static NSColor *CartoonColorFromHexString(NSString *hexString) {
     NSTimeInterval _lastStickerAnimationTime;
     CGFloat _stickerWalkPhase;
     CGFloat _stickerWalkSpeed;
+    CGFloat _stickerWalkSpeedMultiplier;
     CGFloat _stickerWalkTilt;
     NSTimeInterval _lastTrailSampleTime;
 }
@@ -219,6 +230,7 @@ static NSColor *CartoonColorFromHexString(NSString *hexString) {
     _cursorVisible = NO;
     _stickerVisible = NO;
     _stickerWalkFollowEnabled = NO;
+    _stickerWalkSpeedMultiplier = DefaultStickerWalkSpeed;
     _hasStickerDrawPoint = NO;
     _hasTrailAnchorPoint = NO;
     _effectStyle = CursorEffectStyleSparklesTrail;
@@ -293,6 +305,10 @@ static NSColor *CartoonColorFromHexString(NSString *hexString) {
     _stickerWalkFollowEnabled = stickerWalkFollowEnabled;
     [self resetStickerMotion];
     self.needsDisplay = YES;
+}
+
+- (void)setStickerWalkSpeedMultiplier:(CGFloat)stickerWalkSpeedMultiplier {
+    _stickerWalkSpeedMultiplier = CartoonClampedStickerWalkSpeed(stickerWalkSpeedMultiplier);
 }
 
 - (void)setEffectStyle:(CursorEffectStyle)effectStyle {
@@ -424,7 +440,7 @@ static NSColor *CartoonColorFromHexString(NSString *hexString) {
         return;
     }
 
-    CGFloat followAmount = 1.0 - exp(-deltaTime * 9.5);
+    CGFloat followAmount = 1.0 - exp(-deltaTime * 9.5 * _stickerWalkSpeedMultiplier);
     NSPoint previousPoint = _stickerDrawPoint;
     _stickerDrawPoint = NSMakePoint(_stickerDrawPoint.x + deltaX * followAmount,
                                     _stickerDrawPoint.y + deltaY * followAmount);
@@ -1141,6 +1157,7 @@ static NSColor *CartoonColorFromHexString(NSString *hexString) {
 @interface CursorController : NSObject
 @property(nonatomic, assign, getter=isEnabled) BOOL enabled;
 @property(nonatomic, assign) BOOL stickerWalkFollowEnabled;
+@property(nonatomic, assign) CGFloat stickerWalkSpeedMultiplier;
 @property(nonatomic, assign) BOOL nativeCursorEffectsEnabled;
 @property(nonatomic, assign) BOOL hideSystemCursor;
 @property(nonatomic, assign) BOOL virtualCursorEnabled;
@@ -1186,6 +1203,7 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     BOOL _needsAccessibilityPermission;
     BOOL _mouseCursorAssociated;
     BOOL _stickerWalkFollowEnabled;
+    CGFloat _stickerWalkSpeedMultiplier;
     BOOL _nativeCursorEffectsEnabled;
     CGPoint _virtualQuartzPoint;
     CursorEffectStyle _effectStyle;
@@ -1246,6 +1264,13 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
         [defaults setBool:NO forKey:DefaultsKeyStickerWalkFollow];
     } else {
         _stickerWalkFollowEnabled = [defaults boolForKey:DefaultsKeyStickerWalkFollow];
+    }
+
+    if ([defaults objectForKey:DefaultsKeyStickerWalkSpeed] == nil) {
+        _stickerWalkSpeedMultiplier = DefaultStickerWalkSpeed;
+        [defaults setDouble:_stickerWalkSpeedMultiplier forKey:DefaultsKeyStickerWalkSpeed];
+    } else {
+        _stickerWalkSpeedMultiplier = CartoonClampedStickerWalkSpeed([defaults doubleForKey:DefaultsKeyStickerWalkSpeed]);
     }
 
     NSInteger behaviorVersion = [defaults integerForKey:DefaultsKeyBehaviorVersion];
@@ -1407,6 +1432,18 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     [NSUserDefaults.standardUserDefaults setBool:stickerWalkFollowEnabled forKey:DefaultsKeyStickerWalkFollow];
     for (CursorView *view in _views) {
         view.stickerWalkFollowEnabled = stickerWalkFollowEnabled;
+    }
+}
+
+- (CGFloat)stickerWalkSpeedMultiplier {
+    return _stickerWalkSpeedMultiplier;
+}
+
+- (void)setStickerWalkSpeedMultiplier:(CGFloat)stickerWalkSpeedMultiplier {
+    _stickerWalkSpeedMultiplier = CartoonClampedStickerWalkSpeed(stickerWalkSpeedMultiplier);
+    [NSUserDefaults.standardUserDefaults setDouble:_stickerWalkSpeedMultiplier forKey:DefaultsKeyStickerWalkSpeed];
+    for (CursorView *view in _views) {
+        view.stickerWalkSpeedMultiplier = _stickerWalkSpeedMultiplier;
     }
 }
 
@@ -1641,6 +1678,7 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
         newView.image = _customImage;
         newView.effectStyle = self.effectStyle;
         newView.stickerWalkFollowEnabled = self.stickerWalkFollowEnabled;
+        newView.stickerWalkSpeedMultiplier = self.stickerWalkSpeedMultiplier;
         newView.customTrailColors = self.customTrailColors;
         newView.customClickColors = self.customClickColors;
         newView.customParticleColors = self.customParticleColors;
@@ -2713,6 +2751,15 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     return submenu;
 }
 
+- (NSArray<NSDictionary *> *)stickerWalkSpeedOptions {
+    return @[
+        @{@"title": @"Slow", @"value": @0.65},
+        @{@"title": @"Normal", @"value": @1.0},
+        @{@"title": @"Fast", @"value": @1.45},
+        @{@"title": @"Very Fast", @"value": @2.0}
+    ];
+}
+
 - (void)rebuildMenu {
     NSMenu *menu = [[NSMenu alloc] init];
 
@@ -2729,6 +2776,25 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     walkFollowItem.target = self;
     walkFollowItem.state = _cursorController.stickerWalkFollowEnabled ? NSControlStateValueOn : NSControlStateValueOff;
     [menu addItem:walkFollowItem];
+
+    NSMenuItem *walkSpeedItem = [[NSMenuItem alloc] initWithTitle:@"Sticker Walk Speed"
+                                                           action:nil
+                                                    keyEquivalent:@""];
+    NSMenu *walkSpeedMenu = [[NSMenu alloc] init];
+    for (NSDictionary *option in [self stickerWalkSpeedOptions]) {
+        NSNumber *speed = option[@"value"];
+        NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:option[@"title"]
+                                                      action:@selector(selectStickerWalkSpeed:)
+                                               keyEquivalent:@""];
+        item.target = self;
+        item.representedObject = speed;
+        item.state = fabs(_cursorController.stickerWalkSpeedMultiplier - speed.doubleValue) < 0.01 ?
+            NSControlStateValueOn :
+            NSControlStateValueOff;
+        [walkSpeedMenu addItem:item];
+    }
+    walkSpeedItem.submenu = walkSpeedMenu;
+    [menu addItem:walkSpeedItem];
 
     NSMenuItem *nativeEffectsItem = [[NSMenuItem alloc] initWithTitle:@"Native Cursor Effects"
                                                                action:@selector(toggleNativeCursorEffects:)
@@ -2839,6 +2905,16 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
 
 - (void)toggleStickerWalkFollow:(NSMenuItem *)sender {
     _cursorController.stickerWalkFollowEnabled = !_cursorController.stickerWalkFollowEnabled;
+    [self rebuildMenu];
+}
+
+- (void)selectStickerWalkSpeed:(NSMenuItem *)sender {
+    NSNumber *speed = sender.representedObject;
+    if (![speed isKindOfClass:NSNumber.class]) {
+        return;
+    }
+
+    _cursorController.stickerWalkSpeedMultiplier = speed.doubleValue;
     [self rebuildMenu];
 }
 
