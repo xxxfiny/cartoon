@@ -12,6 +12,9 @@ static NSString * const DefaultsKeyVirtualCursor = @"virtualCursor";
 static NSString * const DefaultsKeyEffectStyle = @"effectStyle";
 static NSString * const DefaultsKeyEffectColorMode = @"effectColorMode";
 static NSString * const DefaultsKeyCustomEffectColors = @"customEffectColors";
+static NSString * const DefaultsKeyCustomTrailColors = @"customTrailColors";
+static NSString * const DefaultsKeyCustomClickColors = @"customClickColors";
+static NSString * const DefaultsKeyCustomParticleColors = @"customParticleColors";
 static NSString * const DefaultsKeyNativeCursorEffects = @"nativeCursorEffects";
 static NSString * const DefaultsKeyBehaviorVersion = @"behaviorVersion";
 static const NSInteger CurrentBehaviorVersion = 6;
@@ -29,6 +32,12 @@ typedef NS_ENUM(NSInteger, CursorEffectStyle) {
 typedef NS_ENUM(NSInteger, EffectColorMode) {
     EffectColorModeAuto = 0,
     EffectColorModeCustom = 1
+};
+
+typedef NS_ENUM(NSInteger, EffectColorRole) {
+    EffectColorRoleTrail = 0,
+    EffectColorRoleClick = 1,
+    EffectColorRoleParticle = 2
 };
 
 static NSColor *CartoonColorUsingSRGB(NSColor *color) {
@@ -145,7 +154,9 @@ static NSColor *CartoonColorFromHexString(NSString *hexString) {
 @property(nonatomic, assign) BOOL stickerVisible;
 @property(nonatomic, assign) CursorEffectStyle effectStyle;
 @property(nonatomic, assign) EffectColorMode effectColorMode;
-@property(nonatomic, copy) NSArray<NSColor *> *customEffectColors;
+@property(nonatomic, copy) NSArray<NSColor *> *customTrailColors;
+@property(nonatomic, copy) NSArray<NSColor *> *customClickColors;
+@property(nonatomic, copy) NSArray<NSColor *> *customParticleColors;
 + (NSArray<NSColor *> *)defaultEffectColors;
 + (NSArray<NSColor *> *)normalizedEffectColors:(NSArray<NSColor *> *)colors;
 - (void)addPulseAtPoint:(NSPoint)point;
@@ -154,8 +165,13 @@ static NSColor *CartoonColorFromHexString(NSString *hexString) {
 @implementation CursorView {
     NSMutableArray<Pulse *> *_pulses;
     NSMutableArray<TrailPoint *> *_trailPoints;
-    NSArray<NSColor *> *_effectColors;
-    NSArray<NSColor *> *_customEffectColors;
+    NSArray<NSColor *> *_autoEffectColors;
+    NSArray<NSColor *> *_trailEffectColors;
+    NSArray<NSColor *> *_clickEffectColors;
+    NSArray<NSColor *> *_particleEffectColors;
+    NSArray<NSColor *> *_customTrailColors;
+    NSArray<NSColor *> *_customClickColors;
+    NSArray<NSColor *> *_customParticleColors;
     EffectColorMode _effectColorMode;
     NSTimeInterval _lastTrailSampleTime;
 }
@@ -171,10 +187,15 @@ static NSColor *CartoonColorFromHexString(NSString *hexString) {
     _stickerVisible = NO;
     _effectStyle = CursorEffectStyleSparklesTrail;
     _effectColorMode = EffectColorModeAuto;
-    _customEffectColors = [self.class defaultEffectColors];
+    _customTrailColors = [self.class defaultEffectColors];
+    _customClickColors = [self.class defaultEffectColors];
+    _customParticleColors = [self.class defaultEffectColors];
     _pulses = [NSMutableArray array];
     _trailPoints = [NSMutableArray array];
-    _effectColors = [self.class defaultEffectColors];
+    _autoEffectColors = [self.class defaultEffectColors];
+    _trailEffectColors = [self.class defaultEffectColors];
+    _clickEffectColors = [self.class defaultEffectColors];
+    _particleEffectColors = [self.class defaultEffectColors];
     _lastTrailSampleTime = 0;
     return self;
 }
@@ -225,19 +246,36 @@ static NSColor *CartoonColorFromHexString(NSString *hexString) {
     self.needsDisplay = YES;
 }
 
-- (void)setCustomEffectColors:(NSArray<NSColor *> *)customEffectColors {
-    _customEffectColors = [self.class normalizedEffectColors:customEffectColors];
+- (void)setCustomTrailColors:(NSArray<NSColor *> *)customTrailColors {
+    _customTrailColors = [self.class normalizedEffectColors:customTrailColors];
+    [self refreshEffectColors];
+    self.needsDisplay = YES;
+}
+
+- (void)setCustomClickColors:(NSArray<NSColor *> *)customClickColors {
+    _customClickColors = [self.class normalizedEffectColors:customClickColors];
+    [self refreshEffectColors];
+    self.needsDisplay = YES;
+}
+
+- (void)setCustomParticleColors:(NSArray<NSColor *> *)customParticleColors {
+    _customParticleColors = [self.class normalizedEffectColors:customParticleColors];
     [self refreshEffectColors];
     self.needsDisplay = YES;
 }
 
 - (void)refreshEffectColors {
     if (_effectColorMode == EffectColorModeCustom) {
-        _effectColors = [self.class normalizedEffectColors:_customEffectColors];
+        _trailEffectColors = [self.class normalizedEffectColors:_customTrailColors];
+        _clickEffectColors = [self.class normalizedEffectColors:_customClickColors];
+        _particleEffectColors = [self.class normalizedEffectColors:_customParticleColors];
         return;
     }
 
-    _effectColors = self.image ? [self.class effectColorsForImage:self.image] : [self.class defaultEffectColors];
+    _autoEffectColors = self.image ? [self.class effectColorsForImage:self.image] : [self.class defaultEffectColors];
+    _trailEffectColors = _autoEffectColors;
+    _clickEffectColors = _autoEffectColors;
+    _particleEffectColors = _autoEffectColors;
 }
 
 - (void)addPulseAtPoint:(NSPoint)point {
@@ -549,8 +587,25 @@ static NSColor *CartoonColorFromHexString(NSString *hexString) {
     return colors;
 }
 
-- (NSColor *)effectColorAtIndex:(NSInteger)index alpha:(CGFloat)alpha {
-    NSArray<NSColor *> *colors = _effectColors.count > 0 ? _effectColors : self.class.defaultEffectColors;
+- (NSArray<NSColor *> *)effectColorsForRole:(EffectColorRole)role {
+    NSArray<NSColor *> *colors = nil;
+    switch (role) {
+        case EffectColorRoleTrail:
+            colors = _trailEffectColors;
+            break;
+        case EffectColorRoleClick:
+            colors = _clickEffectColors;
+            break;
+        case EffectColorRoleParticle:
+            colors = _particleEffectColors;
+            break;
+    }
+
+    return colors.count > 0 ? colors : self.class.defaultEffectColors;
+}
+
+- (NSColor *)effectColorForRole:(EffectColorRole)role index:(NSInteger)index alpha:(CGFloat)alpha {
+    NSArray<NSColor *> *colors = [self effectColorsForRole:role];
     NSColor *baseColor = colors[index % colors.count];
     return [baseColor colorWithAlphaComponent:alpha];
 }
@@ -659,8 +714,9 @@ static NSColor *CartoonColorFromHexString(NSString *hexString) {
         CGFloat progress = age / duration;
         CGFloat fade = pow(1.0 - progress, 1.55);
         CGFloat size = MAX(5.0, self.cursorSize * (0.105 - progress * 0.045));
-        NSInteger colorIndex = trailPoint.seed % MAX(1, _effectColors.count);
-        NSColor *color = [self effectColorAtIndex:colorIndex alpha:0.42 * fade];
+        NSArray<NSColor *> *trailColors = [self effectColorsForRole:EffectColorRoleTrail];
+        NSInteger colorIndex = trailPoint.seed % MAX(1, trailColors.count);
+        NSColor *color = [self effectColorForRole:EffectColorRoleTrail index:colorIndex alpha:0.42 * fade];
 
         [self drawTrailBubbleAtPoint:trailPoint.point
                                 size:size
@@ -688,7 +744,7 @@ static NSColor *CartoonColorFromHexString(NSString *hexString) {
     [[NSBezierPath bezierPathWithOvalInRect:rect] fill];
 
     if (seed % 4 == 0) {
-        NSColor *accent = [self effectColorAtIndex:seed % 5 alpha:alpha * 0.75];
+        NSColor *accent = [self effectColorForRole:EffectColorRoleTrail index:seed % 5 alpha:alpha * 0.75];
         [self drawStarAtPoint:NSMakePoint(bubblePoint.x + size * 0.66, bubblePoint.y + size * 0.18)
                          size:size * 0.86
                         color:accent
@@ -747,7 +803,7 @@ static NSColor *CartoonColorFromHexString(NSString *hexString) {
                                  haloRadius * 2,
                                  haloRadius * 2);
 
-    [[self effectColorAtIndex:0 alpha:0.13 * fade] setFill];
+    [[self effectColorForRole:EffectColorRoleClick index:0 alpha:0.13 * fade] setFill];
     [[NSBezierPath bezierPathWithOvalInRect:haloRect] fill];
 
     CGFloat ringRadius = baseRadius * (0.58 + eased * 1.20);
@@ -757,7 +813,7 @@ static NSColor *CartoonColorFromHexString(NSString *hexString) {
                                  ringRadius * 2);
     NSBezierPath *ring = [NSBezierPath bezierPathWithOvalInRect:ringRect];
     ring.lineWidth = MAX(2.0, self.cursorSize * 0.020);
-    [[self effectColorAtIndex:0 alpha:0.46 * fade] setStroke];
+    [[self effectColorForRole:EffectColorRoleClick index:0 alpha:0.46 * fade] setStroke];
     [ring stroke];
 
     if (progress > 0.14) {
@@ -770,7 +826,7 @@ static NSColor *CartoonColorFromHexString(NSString *hexString) {
                                        secondRadius * 2);
         NSBezierPath *secondRing = [NSBezierPath bezierPathWithOvalInRect:secondRect];
         secondRing.lineWidth = MAX(1.5, self.cursorSize * 0.014);
-        [[self effectColorAtIndex:1 alpha:0.28 * delayedFade] setStroke];
+        [[self effectColorForRole:EffectColorRoleClick index:1 alpha:0.28 * delayedFade] setStroke];
         [secondRing stroke];
     }
 }
@@ -793,7 +849,7 @@ static NSColor *CartoonColorFromHexString(NSString *hexString) {
                                             point.y + sin(angle + wobble) * travel + pop * baseRadius * 0.10);
         CGFloat size = MAX(6.0, baseRadius * (0.13 + 0.018 * (CGFloat)(index % 4))) * (0.72 + pop * 0.28);
         CGFloat alpha = 0.88 * fade;
-        NSColor *color = [self effectColorAtIndex:index alpha:1.0];
+        NSColor *color = [self effectColorForRole:EffectColorRoleParticle index:index alpha:1.0];
 
         if (index % 3 == 0) {
             [self drawHeartAtPoint:particlePoint size:size color:color alpha:alpha];
@@ -877,7 +933,9 @@ static NSColor *CartoonColorFromHexString(NSString *hexString) {
 @property(nonatomic, assign) CGFloat cursorSize;
 @property(nonatomic, assign) CursorEffectStyle effectStyle;
 @property(nonatomic, assign) EffectColorMode effectColorMode;
-@property(nonatomic, copy) NSArray<NSColor *> *customEffectColors;
+@property(nonatomic, copy) NSArray<NSColor *> *customTrailColors;
+@property(nonatomic, copy) NSArray<NSColor *> *customClickColors;
+@property(nonatomic, copy) NSArray<NSColor *> *customParticleColors;
 + (NSArray<NSNumber *> *)sizes;
 - (void)start;
 - (void)stop;
@@ -911,7 +969,9 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     CGPoint _virtualQuartzPoint;
     CursorEffectStyle _effectStyle;
     EffectColorMode _effectColorMode;
-    NSArray<NSColor *> *_customEffectColors;
+    NSArray<NSColor *> *_customTrailColors;
+    NSArray<NSColor *> *_customClickColors;
+    NSArray<NSColor *> *_customParticleColors;
     NSImage *_customImage;
 }
 
@@ -1001,13 +1061,36 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
             EffectColorModeAuto;
     }
 
-    NSArray *storedColors = [defaults arrayForKey:DefaultsKeyCustomEffectColors];
-    if (storedColors.count > 0) {
-        _customEffectColors = [self.class effectColorsFromStoredHexStrings:storedColors];
-    } else {
-        _customEffectColors = [CursorView defaultEffectColors];
-        [defaults setObject:[self.class storedHexStringsFromEffectColors:_customEffectColors]
-                     forKey:DefaultsKeyCustomEffectColors];
+    NSArray *legacyStoredColors = [defaults arrayForKey:DefaultsKeyCustomEffectColors];
+    NSArray<NSColor *> *legacyColors = legacyStoredColors.count > 0 ?
+        [self.class effectColorsFromStoredHexStrings:legacyStoredColors] :
+        [CursorView defaultEffectColors];
+
+    NSArray *storedTrailColors = [defaults arrayForKey:DefaultsKeyCustomTrailColors];
+    _customTrailColors = storedTrailColors.count > 0 ?
+        [self.class effectColorsFromStoredHexStrings:storedTrailColors] :
+        legacyColors;
+    if ([defaults objectForKey:DefaultsKeyCustomTrailColors] == nil) {
+        [defaults setObject:[self.class storedHexStringsFromEffectColors:_customTrailColors]
+                     forKey:DefaultsKeyCustomTrailColors];
+    }
+
+    NSArray *storedClickColors = [defaults arrayForKey:DefaultsKeyCustomClickColors];
+    _customClickColors = storedClickColors.count > 0 ?
+        [self.class effectColorsFromStoredHexStrings:storedClickColors] :
+        legacyColors;
+    if ([defaults objectForKey:DefaultsKeyCustomClickColors] == nil) {
+        [defaults setObject:[self.class storedHexStringsFromEffectColors:_customClickColors]
+                     forKey:DefaultsKeyCustomClickColors];
+    }
+
+    NSArray *storedParticleColors = [defaults arrayForKey:DefaultsKeyCustomParticleColors];
+    _customParticleColors = storedParticleColors.count > 0 ?
+        [self.class effectColorsFromStoredHexStrings:storedParticleColors] :
+        legacyColors;
+    if ([defaults objectForKey:DefaultsKeyCustomParticleColors] == nil) {
+        [defaults setObject:[self.class storedHexStringsFromEffectColors:_customParticleColors]
+                     forKey:DefaultsKeyCustomParticleColors];
     }
 
     if ([defaults objectForKey:DefaultsKeyNativeCursorEffects] == nil) {
@@ -1114,16 +1197,42 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     }
 }
 
-- (NSArray<NSColor *> *)customEffectColors {
-    return _customEffectColors;
+- (NSArray<NSColor *> *)customTrailColors {
+    return _customTrailColors;
 }
 
-- (void)setCustomEffectColors:(NSArray<NSColor *> *)customEffectColors {
-    _customEffectColors = [CursorView normalizedEffectColors:customEffectColors];
-    [NSUserDefaults.standardUserDefaults setObject:[self.class storedHexStringsFromEffectColors:_customEffectColors]
-                                           forKey:DefaultsKeyCustomEffectColors];
+- (void)setCustomTrailColors:(NSArray<NSColor *> *)customTrailColors {
+    _customTrailColors = [CursorView normalizedEffectColors:customTrailColors];
+    [NSUserDefaults.standardUserDefaults setObject:[self.class storedHexStringsFromEffectColors:_customTrailColors]
+                                           forKey:DefaultsKeyCustomTrailColors];
     for (CursorView *view in _views) {
-        view.customEffectColors = _customEffectColors;
+        view.customTrailColors = _customTrailColors;
+    }
+}
+
+- (NSArray<NSColor *> *)customClickColors {
+    return _customClickColors;
+}
+
+- (void)setCustomClickColors:(NSArray<NSColor *> *)customClickColors {
+    _customClickColors = [CursorView normalizedEffectColors:customClickColors];
+    [NSUserDefaults.standardUserDefaults setObject:[self.class storedHexStringsFromEffectColors:_customClickColors]
+                                           forKey:DefaultsKeyCustomClickColors];
+    for (CursorView *view in _views) {
+        view.customClickColors = _customClickColors;
+    }
+}
+
+- (NSArray<NSColor *> *)customParticleColors {
+    return _customParticleColors;
+}
+
+- (void)setCustomParticleColors:(NSArray<NSColor *> *)customParticleColors {
+    _customParticleColors = [CursorView normalizedEffectColors:customParticleColors];
+    [NSUserDefaults.standardUserDefaults setObject:[self.class storedHexStringsFromEffectColors:_customParticleColors]
+                                           forKey:DefaultsKeyCustomParticleColors];
+    for (CursorView *view in _views) {
+        view.customParticleColors = _customParticleColors;
     }
 }
 
@@ -1197,7 +1306,9 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
         newView.cursorSize = self.cursorSize;
         newView.image = _customImage;
         newView.effectStyle = self.effectStyle;
-        newView.customEffectColors = self.customEffectColors;
+        newView.customTrailColors = self.customTrailColors;
+        newView.customClickColors = self.customClickColors;
+        newView.customParticleColors = self.customParticleColors;
         newView.effectColorMode = self.effectColorMode;
         newView.stickerVisible = self.isEnabled;
 
@@ -1646,6 +1757,7 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
 @implementation AppDelegate {
     CursorController *_cursorController;
     NSStatusItem *_statusItem;
+    EffectColorRole _editingPaletteRole;
     NSInteger _editingPaletteIndex;
 }
 
@@ -1656,6 +1768,7 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     }
 
     _cursorController = [[CursorController alloc] init];
+    _editingPaletteRole = EffectColorRoleTrail;
     _editingPaletteIndex = -1;
     return self;
 }
@@ -1706,10 +1819,87 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
         case EffectColorModeAuto:
             return @"Auto From Sticker";
         case EffectColorModeCustom:
-            return @"Custom Palette";
+            return @"Custom Palettes";
     }
 
     return @"Auto From Sticker";
+}
+
+- (NSString *)titleForEffectColorRole:(EffectColorRole)role {
+    switch (role) {
+        case EffectColorRoleTrail:
+            return @"Trail Colors";
+        case EffectColorRoleClick:
+            return @"Click Colors";
+        case EffectColorRoleParticle:
+            return @"Sparkle Colors";
+    }
+
+    return @"Trail Colors";
+}
+
+- (NSArray<NSColor *> *)customColorsForRole:(EffectColorRole)role {
+    switch (role) {
+        case EffectColorRoleTrail:
+            return _cursorController.customTrailColors;
+        case EffectColorRoleClick:
+            return _cursorController.customClickColors;
+        case EffectColorRoleParticle:
+            return _cursorController.customParticleColors;
+    }
+
+    return _cursorController.customTrailColors;
+}
+
+- (void)setCustomColors:(NSArray<NSColor *> *)colors forRole:(EffectColorRole)role {
+    switch (role) {
+        case EffectColorRoleTrail:
+            _cursorController.customTrailColors = colors;
+            break;
+        case EffectColorRoleClick:
+            _cursorController.customClickColors = colors;
+            break;
+        case EffectColorRoleParticle:
+            _cursorController.customParticleColors = colors;
+            break;
+    }
+}
+
+- (NSMenuItem *)effectColorMenuItemForRole:(EffectColorRole)role {
+    NSMenuItem *roleItem = [[NSMenuItem alloc] initWithTitle:[self titleForEffectColorRole:role]
+                                                      action:nil
+                                               keyEquivalent:@""];
+    NSMenu *roleMenu = [[NSMenu alloc] init];
+    NSArray<NSColor *> *customColors = [self customColorsForRole:role];
+    NSArray<NSColor *> *defaultColors = [CursorView defaultEffectColors];
+
+    for (NSInteger index = 0; index < 4; index++) {
+        NSColor *color = index < (NSInteger)customColors.count ? customColors[index] : defaultColors[index];
+        NSString *title = [NSString stringWithFormat:@"Color %ld...", (long)index + 1];
+        NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:title
+                                                      action:@selector(editCustomEffectColor:)
+                                               keyEquivalent:@""];
+        item.target = self;
+        item.representedObject = @{
+            @"role": @(role),
+            @"index": @(index)
+        };
+        item.image = [self swatchImageForColor:color];
+        [roleMenu addItem:item];
+    }
+
+    [roleMenu addItem:NSMenuItem.separatorItem];
+
+    NSString *resetTitle = [NSString stringWithFormat:@"Reset %@", [self titleForEffectColorRole:role]];
+    NSMenuItem *resetItem = [[NSMenuItem alloc] initWithTitle:resetTitle
+                                                       action:@selector(resetCustomEffectColors:)
+                                                keyEquivalent:@""];
+    resetItem.target = self;
+    resetItem.representedObject = @(role);
+    [roleMenu addItem:resetItem];
+
+    roleItem.submenu = roleMenu;
+    return roleItem;
 }
 
 - (NSImage *)swatchImageForColor:(NSColor *)color {
@@ -1821,24 +2011,14 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
 
     [effectColorsMenu addItem:NSMenuItem.separatorItem];
 
-    NSArray<NSColor *> *customColors = _cursorController.customEffectColors;
-    NSArray<NSColor *> *defaultColors = [CursorView defaultEffectColors];
-    for (NSInteger index = 0; index < 4; index++) {
-        NSColor *color = index < (NSInteger)customColors.count ? customColors[index] : defaultColors[index];
-        NSString *title = [NSString stringWithFormat:@"Custom Color %ld...", (long)index + 1];
-        NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:title
-                                                      action:@selector(editCustomEffectColor:)
-                                               keyEquivalent:@""];
-        item.target = self;
-        item.representedObject = @(index);
-        item.image = [self swatchImageForColor:color];
-        [effectColorsMenu addItem:item];
-    }
+    [effectColorsMenu addItem:[self effectColorMenuItemForRole:EffectColorRoleTrail]];
+    [effectColorsMenu addItem:[self effectColorMenuItemForRole:EffectColorRoleClick]];
+    [effectColorsMenu addItem:[self effectColorMenuItemForRole:EffectColorRoleParticle]];
 
     [effectColorsMenu addItem:NSMenuItem.separatorItem];
 
-    NSMenuItem *resetColorsItem = [[NSMenuItem alloc] initWithTitle:@"Reset Custom Palette"
-                                                             action:@selector(resetCustomEffectColors:)
+    NSMenuItem *resetColorsItem = [[NSMenuItem alloc] initWithTitle:@"Reset All Custom Palettes"
+                                                             action:@selector(resetAllCustomEffectColors:)
                                                       keyEquivalent:@""];
     resetColorsItem.target = self;
     [effectColorsMenu addItem:resetColorsItem];
@@ -1946,19 +2126,27 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
 }
 
 - (void)editCustomEffectColor:(NSMenuItem *)sender {
-    NSNumber *indexNumber = sender.representedObject;
-    if (![indexNumber isKindOfClass:NSNumber.class]) {
+    NSDictionary *payload = sender.representedObject;
+    if (![payload isKindOfClass:NSDictionary.class]) {
         return;
     }
 
+    NSNumber *roleNumber = payload[@"role"];
+    NSNumber *indexNumber = payload[@"index"];
+    if (![roleNumber isKindOfClass:NSNumber.class] || ![indexNumber isKindOfClass:NSNumber.class]) {
+        return;
+    }
+
+    EffectColorRole role = roleNumber.integerValue;
     NSInteger index = indexNumber.integerValue;
     if (index < 0 || index >= 4) {
         return;
     }
 
+    _editingPaletteRole = role;
     _editingPaletteIndex = index;
     _cursorController.effectColorMode = EffectColorModeCustom;
-    NSArray<NSColor *> *colors = _cursorController.customEffectColors;
+    NSArray<NSColor *> *colors = [self customColorsForRole:role];
     NSArray<NSColor *> *defaultColors = [CursorView defaultEffectColors];
     NSColor *color = index < (NSInteger)colors.count ? colors[index] : defaultColors[index];
 
@@ -1977,16 +2165,30 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
         return;
     }
 
-    NSMutableArray<NSColor *> *colors = [[CursorView normalizedEffectColors:_cursorController.customEffectColors] mutableCopy];
+    NSMutableArray<NSColor *> *colors = [[CursorView normalizedEffectColors:[self customColorsForRole:_editingPaletteRole]] mutableCopy];
     colors[_editingPaletteIndex] = CartoonColorUsingSRGB(sender.color);
     _cursorController.effectColorMode = EffectColorModeCustom;
-    _cursorController.customEffectColors = colors;
+    [self setCustomColors:colors forRole:_editingPaletteRole];
     [self rebuildMenu];
 }
 
 - (void)resetCustomEffectColors:(NSMenuItem *)sender {
+    NSNumber *roleNumber = sender.representedObject;
+    if (![roleNumber isKindOfClass:NSNumber.class]) {
+        return;
+    }
+
     _cursorController.effectColorMode = EffectColorModeCustom;
-    _cursorController.customEffectColors = [CursorView defaultEffectColors];
+    [self setCustomColors:[CursorView defaultEffectColors] forRole:roleNumber.integerValue];
+    [self rebuildMenu];
+}
+
+- (void)resetAllCustomEffectColors:(NSMenuItem *)sender {
+    _cursorController.effectColorMode = EffectColorModeCustom;
+    NSArray<NSColor *> *defaults = [CursorView defaultEffectColors];
+    _cursorController.customTrailColors = defaults;
+    _cursorController.customClickColors = defaults;
+    _cursorController.customParticleColors = defaults;
     [self rebuildMenu];
 }
 
