@@ -1764,6 +1764,7 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     NSArray<NSTextField *> *_paletteRedFields;
     NSArray<NSTextField *> *_paletteGreenFields;
     NSArray<NSTextField *> *_paletteBlueFields;
+    NSArray<NSArray<NSButton *> *> *_palettePresetButtons;
     NSArray<NSColor *> *_paletteDraftColors;
     BOOL _updatingPaletteControls;
 }
@@ -1899,6 +1900,46 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     return image;
 }
 
+- (NSImage *)paletteChipImageForColor:(NSColor *)color selected:(BOOL)selected {
+    NSImage *image = [[NSImage alloc] initWithSize:NSMakeSize(22, 22)];
+    [image lockFocus];
+
+    NSRect rect = NSMakeRect(3, 3, 16, 16);
+    NSBezierPath *path = [NSBezierPath bezierPathWithRoundedRect:rect xRadius:4 yRadius:4];
+    [CartoonColorUsingSRGB(color) setFill];
+    [path fill];
+
+    NSColor *borderColor = selected ? NSColor.controlAccentColor : [NSColor colorWithCalibratedWhite:0 alpha:0.28];
+    [borderColor setStroke];
+    path.lineWidth = selected ? 2.0 : 1.0;
+    [path stroke];
+
+    [image unlockFocus];
+    image.template = NO;
+    return image;
+}
+
+- (NSArray<NSColor *> *)palettePresetColors {
+    return @[
+        CartoonColorFromHexString(@"#000000"),
+        CartoonColorFromHexString(@"#FFFFFF"),
+        CartoonColorFromHexString(@"#7A7A7A"),
+        CartoonColorFromHexString(@"#FF5A8A"),
+        CartoonColorFromHexString(@"#FF3B30"),
+        CartoonColorFromHexString(@"#FF9500"),
+        CartoonColorFromHexString(@"#FFD60A"),
+        CartoonColorFromHexString(@"#34C759"),
+        CartoonColorFromHexString(@"#00C7BE"),
+        CartoonColorFromHexString(@"#32ADE6"),
+        CartoonColorFromHexString(@"#007AFF"),
+        CartoonColorFromHexString(@"#5856D6"),
+        CartoonColorFromHexString(@"#AF52DE"),
+        CartoonColorFromHexString(@"#FF9FCE"),
+        CartoonColorFromHexString(@"#B5E7FF"),
+        CartoonColorFromHexString(@"#C8F7C5")
+    ];
+}
+
 - (void)showEffectColorEditor:(NSMenuItem *)sender {
     NSNumber *roleNumber = sender.representedObject;
     if (![roleNumber isKindOfClass:NSNumber.class]) {
@@ -1913,7 +1954,7 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     NSArray<NSColor *> *colors = [CursorView normalizedEffectColors:[self customColorsForRole:role]];
     _paletteDraftColors = colors;
 
-    NSRect frame = NSMakeRect(0, 0, 440, 310);
+    NSRect frame = NSMakeRect(0, 0, 520, 410);
     _palettePanel = [[NSPanel alloc] initWithContentRect:frame
                                                styleMask:NSWindowStyleMaskTitled |
                                                          NSWindowStyleMaskClosable |
@@ -1930,38 +1971,40 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     NSMutableArray<NSTextField *> *redFields = [NSMutableArray array];
     NSMutableArray<NSTextField *> *greenFields = [NSMutableArray array];
     NSMutableArray<NSTextField *> *blueFields = [NSMutableArray array];
+    NSMutableArray<NSArray<NSButton *> *> *presetButtons = [NSMutableArray array];
+    NSArray<NSColor *> *presetColors = [self palettePresetColors];
 
-    NSTextField *titleLabel = [NSTextField labelWithString:@"Edit each row independently, then apply together."];
-    titleLabel.frame = NSMakeRect(24, 274, 392, 20);
+    NSTextField *titleLabel = [NSTextField labelWithString:@"Pick a swatch or type values, then apply together."];
+    titleLabel.frame = NSMakeRect(24, 374, 472, 20);
     titleLabel.textColor = NSColor.secondaryLabelColor;
     [contentView addSubview:titleLabel];
 
     NSArray<NSDictionary *> *headers = @[
         @{@"title": @"Hex", @"x": @154},
-        @{@"title": @"R", @"x": @274},
-        @{@"title": @"G", @"x": @326},
-        @{@"title": @"B", @"x": @378}
+        @{@"title": @"R", @"x": @314},
+        @{@"title": @"G", @"x": @366},
+        @{@"title": @"B", @"x": @418}
     ];
     for (NSDictionary *header in headers) {
         NSTextField *label = [NSTextField labelWithString:header[@"title"]];
-        label.frame = NSMakeRect([header[@"x"] doubleValue], 244, 42, 18);
+        label.frame = NSMakeRect([header[@"x"] doubleValue], 344, 42, 18);
         label.textColor = NSColor.secondaryLabelColor;
         [contentView addSubview:label];
     }
 
     for (NSInteger index = 0; index < 4; index++) {
-        CGFloat y = 202 - index * 42;
+        CGFloat y = 286 - index * 72;
         NSTextField *label = [NSTextField labelWithString:[NSString stringWithFormat:@"Color %ld", (long)index + 1]];
-        label.frame = NSMakeRect(24, y + 5, 70, 20);
+        label.frame = NSMakeRect(24, y + 35, 70, 20);
         [contentView addSubview:label];
 
-        NSImageView *swatch = [[NSImageView alloc] initWithFrame:NSMakeRect(98, y + 2, 30, 26)];
+        NSImageView *swatch = [[NSImageView alloc] initWithFrame:NSMakeRect(98, y + 32, 30, 26)];
         swatch.image = [self swatchImageForColor:colors[index]];
         swatch.imageScaling = NSImageScaleNone;
         [contentView addSubview:swatch];
         [colorSwatches addObject:swatch];
 
-        NSTextField *hexField = [[NSTextField alloc] initWithFrame:NSMakeRect(144, y + 1, 104, 28)];
+        NSTextField *hexField = [[NSTextField alloc] initWithFrame:NSMakeRect(144, y + 31, 128, 28)];
         hexField.stringValue = CartoonHexStringFromColor(colors[index]);
         hexField.tag = index;
         hexField.target = self;
@@ -1971,10 +2014,10 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
         [contentView addSubview:hexField];
         [hexFields addObject:hexField];
 
-        NSArray<NSNumber *> *channelXs = @[@268, @320, @372];
+        NSArray<NSNumber *> *channelXs = @[@308, @360, @412];
         NSArray<NSMutableArray<NSTextField *> *> *channelFieldGroups = @[redFields, greenFields, blueFields];
         for (NSInteger channel = 0; channel < 3; channel++) {
-            NSTextField *field = [[NSTextField alloc] initWithFrame:NSMakeRect(channelXs[channel].doubleValue, y + 1, 42, 28)];
+            NSTextField *field = [[NSTextField alloc] initWithFrame:NSMakeRect(channelXs[channel].doubleValue, y + 31, 42, 28)];
             field.tag = index * 3 + channel;
             field.target = self;
             field.action = @selector(paletteChannelFieldChanged:);
@@ -1983,6 +2026,21 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
             [contentView addSubview:field];
             [channelFieldGroups[channel] addObject:field];
         }
+
+        NSMutableArray<NSButton *> *rowPresetButtons = [NSMutableArray arrayWithCapacity:presetColors.count];
+        for (NSInteger presetIndex = 0; presetIndex < (NSInteger)presetColors.count; presetIndex++) {
+            NSButton *button = [[NSButton alloc] initWithFrame:NSMakeRect(98 + presetIndex * 24, y + 2, 22, 22)];
+            button.bordered = NO;
+            button.image = [self paletteChipImageForColor:presetColors[presetIndex] selected:NO];
+            button.imageScaling = NSImageScaleNone;
+            button.target = self;
+            button.action = @selector(selectPalettePresetColor:);
+            button.tag = index * 100 + presetIndex;
+            button.toolTip = CartoonHexStringFromColor(presetColors[presetIndex]);
+            [contentView addSubview:button];
+            [rowPresetButtons addObject:button];
+        }
+        [presetButtons addObject:rowPresetButtons];
     }
 
     NSButton *resetButton = [NSButton buttonWithTitle:@"Reset"
@@ -1994,13 +2052,13 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     NSButton *cancelButton = [NSButton buttonWithTitle:@"Cancel"
                                               target:self
                                               action:@selector(closePalettePanel:)];
-    cancelButton.frame = NSMakeRect(264, 14, 90, 30);
+    cancelButton.frame = NSMakeRect(344, 14, 90, 30);
     [contentView addSubview:cancelButton];
 
     NSButton *applyButton = [NSButton buttonWithTitle:@"Apply"
                                                target:self
                                                action:@selector(applyPalettePanel:)];
-    applyButton.frame = NSMakeRect(358, 14, 72, 30);
+    applyButton.frame = NSMakeRect(438, 14, 72, 30);
     applyButton.keyEquivalent = @"\r";
     [contentView addSubview:applyButton];
 
@@ -2009,6 +2067,7 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     _paletteRedFields = redFields;
     _paletteGreenFields = greenFields;
     _paletteBlueFields = blueFields;
+    _palettePresetButtons = presetButtons;
     _palettePanel.contentView = contentView;
 
     [NSApp activateIgnoringOtherApps:YES];
@@ -2056,6 +2115,18 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     [self applyPaletteChannelField:sender allowPartial:NO];
 }
 
+- (void)selectPalettePresetColor:(NSButton *)sender {
+    NSInteger index = sender.tag / 100;
+    NSInteger presetIndex = sender.tag % 100;
+    NSArray<NSColor *> *presetColors = [self palettePresetColors];
+    if (index < 0 || index >= 4 || presetIndex < 0 || presetIndex >= (NSInteger)presetColors.count) {
+        return;
+    }
+
+    [_palettePanel makeFirstResponder:nil];
+    [self setPaletteDraftColor:presetColors[presetIndex] atIndex:index preservingField:nil];
+}
+
 - (BOOL)applyPaletteChannelField:(NSTextField *)sender allowPartial:(BOOL)allowPartial {
     if (_updatingPaletteControls) {
         return NO;
@@ -2078,7 +2149,8 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     if (!didScan || value < 0 || value > 255) {
         if (!allowPartial) {
             NSBeep();
-            [self updatePalettePanelControlsWithColors:_paletteDraftColors];
+            NSArray<NSColor *> *colors = [CursorView normalizedEffectColors:_paletteDraftColors];
+            [self updatePaletteRowAtIndex:index color:colors[index] preservingField:nil];
         }
         return NO;
     }
@@ -2208,6 +2280,16 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
         NSTextField *field = _paletteBlueFields[index];
         if (field != preservedField) {
             field.integerValue = (NSInteger)llround(blue * 255.0);
+        }
+    }
+
+    if (index < (NSInteger)_palettePresetButtons.count) {
+        NSString *selectedHex = CartoonHexStringFromColor(color);
+        NSArray<NSColor *> *presetColors = [self palettePresetColors];
+        NSArray<NSButton *> *buttons = _palettePresetButtons[index];
+        for (NSInteger presetIndex = 0; presetIndex < (NSInteger)buttons.count && presetIndex < (NSInteger)presetColors.count; presetIndex++) {
+            BOOL selected = [selectedHex isEqualToString:CartoonHexStringFromColor(presetColors[presetIndex])];
+            buttons[presetIndex].image = [self paletteChipImageForColor:presetColors[presetIndex] selected:selected];
         }
     }
 }
