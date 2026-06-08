@@ -1761,6 +1761,8 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     EffectColorRole _palettePanelRole;
     NSArray<NSColorWell *> *_paletteColorWells;
     NSArray<NSTextField *> *_paletteHexFields;
+    NSArray<NSColor *> *_paletteDraftColors;
+    BOOL _updatingPaletteControls;
 }
 
 - (instancetype)init {
@@ -1905,8 +1907,8 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
 
 - (void)showPalettePanelForRole:(EffectColorRole)role {
     _palettePanelRole = role;
-    _cursorController.effectColorMode = EffectColorModeCustom;
     NSArray<NSColor *> *colors = [CursorView normalizedEffectColors:[self customColorsForRole:role]];
+    _paletteDraftColors = colors;
 
     NSRect frame = NSMakeRect(0, 0, 360, 254);
     _palettePanel = [[NSPanel alloc] initWithContentRect:frame
@@ -1923,7 +1925,7 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     NSMutableArray<NSColorWell *> *colorWells = [NSMutableArray array];
     NSMutableArray<NSTextField *> *hexFields = [NSMutableArray array];
 
-    NSTextField *titleLabel = [NSTextField labelWithString:@"Set all four colors for this effect."];
+    NSTextField *titleLabel = [NSTextField labelWithString:@"Edit all four colors, then apply together."];
     titleLabel.frame = NSMakeRect(24, 214, 312, 20);
     titleLabel.textColor = NSColor.secondaryLabelColor;
     [contentView addSubview:titleLabel];
@@ -1958,12 +1960,18 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     resetButton.frame = NSMakeRect(24, 20, 90, 30);
     [contentView addSubview:resetButton];
 
-    NSButton *doneButton = [NSButton buttonWithTitle:@"Done"
+    NSButton *cancelButton = [NSButton buttonWithTitle:@"Cancel"
                                               target:self
                                               action:@selector(closePalettePanel:)];
-    doneButton.frame = NSMakeRect(246, 20, 90, 30);
-    doneButton.keyEquivalent = @"\r";
-    [contentView addSubview:doneButton];
+    cancelButton.frame = NSMakeRect(146, 20, 90, 30);
+    [contentView addSubview:cancelButton];
+
+    NSButton *applyButton = [NSButton buttonWithTitle:@"Apply"
+                                               target:self
+                                               action:@selector(applyPalettePanel:)];
+    applyButton.frame = NSMakeRect(246, 20, 90, 30);
+    applyButton.keyEquivalent = @"\r";
+    [contentView addSubview:applyButton];
 
     _paletteColorWells = colorWells;
     _paletteHexFields = hexFields;
@@ -1976,20 +1984,26 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
 }
 
 - (void)paletteColorWellChanged:(NSColorWell *)sender {
+    if (_updatingPaletteControls) {
+        return;
+    }
+
     NSInteger index = sender.tag;
     if (index < 0 || index >= 4) {
         return;
     }
 
-    NSMutableArray<NSColor *> *colors = [[CursorView normalizedEffectColors:[self customColorsForRole:_palettePanelRole]] mutableCopy];
+    NSMutableArray<NSColor *> *colors = [[CursorView normalizedEffectColors:_paletteDraftColors] mutableCopy];
     colors[index] = CartoonColorUsingSRGB(sender.color);
-    _cursorController.effectColorMode = EffectColorModeCustom;
-    [self setCustomColors:colors forRole:_palettePanelRole];
+    _paletteDraftColors = colors;
     [self updatePalettePanelControlsWithColors:colors];
-    [self rebuildMenu];
 }
 
 - (void)paletteHexFieldChanged:(NSTextField *)sender {
+    if (_updatingPaletteControls) {
+        return;
+    }
+
     NSInteger index = sender.tag;
     if (index < 0 || index >= 4) {
         return;
@@ -1998,33 +2012,38 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     NSColor *color = CartoonColorFromHexString(sender.stringValue);
     if (!color) {
         NSBeep();
-        NSArray<NSColor *> *colors = [CursorView normalizedEffectColors:[self customColorsForRole:_palettePanelRole]];
+        NSArray<NSColor *> *colors = [CursorView normalizedEffectColors:_paletteDraftColors];
         sender.stringValue = CartoonHexStringFromColor(colors[index]);
         return;
     }
 
-    NSMutableArray<NSColor *> *colors = [[CursorView normalizedEffectColors:[self customColorsForRole:_palettePanelRole]] mutableCopy];
+    NSMutableArray<NSColor *> *colors = [[CursorView normalizedEffectColors:_paletteDraftColors] mutableCopy];
     colors[index] = color;
-    _cursorController.effectColorMode = EffectColorModeCustom;
-    [self setCustomColors:colors forRole:_palettePanelRole];
+    _paletteDraftColors = colors;
     [self updatePalettePanelControlsWithColors:colors];
-    [self rebuildMenu];
 }
 
 - (void)resetOpenPalettePanel:(NSButton *)sender {
-    _cursorController.effectColorMode = EffectColorModeCustom;
     NSArray<NSColor *> *defaults = [CursorView defaultEffectColors];
-    [self setCustomColors:defaults forRole:_palettePanelRole];
+    _paletteDraftColors = defaults;
     [self updatePalettePanelControlsWithColors:defaults];
-    [self rebuildMenu];
 }
 
 - (void)closePalettePanel:(NSButton *)sender {
     [_palettePanel orderOut:nil];
 }
 
+- (void)applyPalettePanel:(NSButton *)sender {
+    _cursorController.effectColorMode = EffectColorModeCustom;
+    NSArray<NSColor *> *colors = [CursorView normalizedEffectColors:_paletteDraftColors];
+    [self setCustomColors:colors forRole:_palettePanelRole];
+    [self rebuildMenu];
+    [_palettePanel orderOut:nil];
+}
+
 - (void)updatePalettePanelControlsWithColors:(NSArray<NSColor *> *)colors {
     NSArray<NSColor *> *normalizedColors = [CursorView normalizedEffectColors:colors];
+    _updatingPaletteControls = YES;
     for (NSInteger index = 0; index < 4; index++) {
         NSColor *color = normalizedColors[index];
         if (index < (NSInteger)_paletteColorWells.count) {
@@ -2034,6 +2053,7 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
             _paletteHexFields[index].stringValue = CartoonHexStringFromColor(color);
         }
     }
+    _updatingPaletteControls = NO;
 }
 
 - (void)rebuildMenu {
