@@ -15,6 +15,7 @@ The package script builds a universal macOS app and writes generated artifacts t
 
 The app includes a separate native cursor effects toggle, so the original macOS cursor can keep click/trail effects even when the cartoon sticker overlay is hidden.
 Effect colors can be sampled from the selected sticker automatically or set with separate custom palettes for trail, click, and sparkle effects.
+Each custom palette has four independent color slots that are cycled across that effect's particles.
 
 ## Sticker Cutout Helpers
 

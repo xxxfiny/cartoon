@@ -1875,7 +1875,7 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
 
     for (NSInteger index = 0; index < 4; index++) {
         NSColor *color = index < (NSInteger)customColors.count ? customColors[index] : defaultColors[index];
-        NSString *title = [NSString stringWithFormat:@"Color %ld...", (long)index + 1];
+        NSString *title = [NSString stringWithFormat:@"Color %ld %@", (long)index + 1, CartoonHexStringFromColor(color)];
         NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:title
                                                       action:@selector(editCustomEffectColor:)
                                                keyEquivalent:@""];
@@ -2143,8 +2143,6 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
         return;
     }
 
-    _editingPaletteRole = role;
-    _editingPaletteIndex = index;
     _cursorController.effectColorMode = EffectColorModeCustom;
     NSArray<NSColor *> *colors = [self customColorsForRole:role];
     NSArray<NSColor *> *defaultColors = [CursorView defaultEffectColors];
@@ -2153,7 +2151,12 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     [NSApp activateIgnoringOtherApps:YES];
     NSColorPanel *panel = NSColorPanel.sharedColorPanel;
     panel.showsAlpha = NO;
+    [panel setTarget:nil];
+    [panel setAction:NULL];
     panel.color = CartoonColorUsingSRGB(color);
+
+    _editingPaletteRole = role;
+    _editingPaletteIndex = index;
     [panel setTarget:self];
     [panel setAction:@selector(customEffectColorChanged:)];
     [panel makeKeyAndOrderFront:nil];
