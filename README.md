@@ -14,6 +14,7 @@ cd work/CartoonCursor
 The package script builds a universal macOS app and writes generated artifacts to `outputs/`.
 
 The app includes a separate native cursor effects toggle, so the original macOS cursor can keep click/trail effects even when the cartoon sticker overlay is hidden.
+Effect colors can be sampled from the selected sticker automatically or set with a custom 4-color palette from the menu bar app.
 
 ## Sticker Cutout Helpers
 
