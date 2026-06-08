@@ -9,6 +9,7 @@ A tiny native macOS menu bar prototype that draws a cartoon cursor overlay that 
 - Custom PNG/JPG/GIF/TIFF image selection.
 - Built-in default cartoon cursor.
 - Effect menu with sparkles, rings, trail, combined sparkles + trail, and off.
+- Optional native cursor effects mode for keeping the original macOS cursor while showing click/trail effects.
 - Effects sample accent colors from the selected sticker, including black/dark colors.
 - Sticker cover mode: custom images preserve their original aspect ratio, and the selected size is the maximum edge. The sticker is anchored near the system cursor tip to visually cover the native cursor.
 

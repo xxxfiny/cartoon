@@ -10,6 +10,7 @@ static NSString * const DefaultsKeyCursorSize = @"cursorSize";
 static NSString * const DefaultsKeyImagePath = @"imagePath";
 static NSString * const DefaultsKeyVirtualCursor = @"virtualCursor";
 static NSString * const DefaultsKeyEffectStyle = @"effectStyle";
+static NSString * const DefaultsKeyNativeCursorEffects = @"nativeCursorEffects";
 static NSString * const DefaultsKeyBehaviorVersion = @"behaviorVersion";
 static const NSInteger CurrentBehaviorVersion = 6;
 static const NSTimeInterval CursorSuppressionInterval = 0.05;
@@ -84,6 +85,7 @@ typedef NS_ENUM(NSInteger, CursorEffectStyle) {
 @property(nonatomic, assign) CGFloat cursorSize;
 @property(nonatomic, strong) NSImage *image;
 @property(nonatomic, assign) BOOL cursorVisible;
+@property(nonatomic, assign) BOOL stickerVisible;
 @property(nonatomic, assign) CursorEffectStyle effectStyle;
 - (void)addPulseAtPoint:(NSPoint)point;
 @end
@@ -103,6 +105,7 @@ typedef NS_ENUM(NSInteger, CursorEffectStyle) {
 
     _cursorSize = 64;
     _cursorVisible = NO;
+    _stickerVisible = NO;
     _effectStyle = CursorEffectStyleSparklesTrail;
     _pulses = [NSMutableArray array];
     _trailPoints = [NSMutableArray array];
@@ -135,6 +138,11 @@ typedef NS_ENUM(NSInteger, CursorEffectStyle) {
 
 - (void)setCursorVisible:(BOOL)cursorVisible {
     _cursorVisible = cursorVisible;
+    self.needsDisplay = YES;
+}
+
+- (void)setStickerVisible:(BOOL)stickerVisible {
+    _stickerVisible = stickerVisible;
     self.needsDisplay = YES;
 }
 
@@ -206,7 +214,7 @@ typedef NS_ENUM(NSInteger, CursorEffectStyle) {
     [self drawTrail];
     [self drawPulses];
 
-    if (!self.cursorVisible) {
+    if (!self.cursorVisible || !self.stickerVisible) {
         return;
     }
 
@@ -745,6 +753,7 @@ typedef NS_ENUM(NSInteger, CursorEffectStyle) {
 
 @interface CursorController : NSObject
 @property(nonatomic, assign, getter=isEnabled) BOOL enabled;
+@property(nonatomic, assign) BOOL nativeCursorEffectsEnabled;
 @property(nonatomic, assign) BOOL hideSystemCursor;
 @property(nonatomic, assign) BOOL virtualCursorEnabled;
 @property(nonatomic, assign, readonly) BOOL virtualCursorActive;
@@ -780,6 +789,7 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     BOOL _virtualCursorActive;
     BOOL _needsAccessibilityPermission;
     BOOL _mouseCursorAssociated;
+    BOOL _nativeCursorEffectsEnabled;
     CGPoint _virtualQuartzPoint;
     CursorEffectStyle _effectStyle;
     NSImage *_customImage;
@@ -838,6 +848,13 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
         }
     }
 
+    if ([defaults objectForKey:DefaultsKeyNativeCursorEffects] == nil) {
+        _nativeCursorEffectsEnabled = NO;
+        [defaults setBool:NO forKey:DefaultsKeyNativeCursorEffects];
+    } else {
+        _nativeCursorEffectsEnabled = [defaults boolForKey:DefaultsKeyNativeCursorEffects];
+    }
+
     NSString *imagePath = [defaults stringForKey:DefaultsKeyImagePath];
     if (imagePath.length > 0) {
         _customImage = [[NSImage alloc] initWithContentsOfFile:imagePath];
@@ -865,6 +882,16 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     _enabled = enabled;
     [NSUserDefaults.standardUserDefaults setBool:enabled forKey:DefaultsKeyEnabled];
     [self applyVirtualCursorState];
+    [self applyEnabledState];
+}
+
+- (BOOL)nativeCursorEffectsEnabled {
+    return _nativeCursorEffectsEnabled;
+}
+
+- (void)setNativeCursorEffectsEnabled:(BOOL)nativeCursorEffectsEnabled {
+    _nativeCursorEffectsEnabled = nativeCursorEffectsEnabled;
+    [NSUserDefaults.standardUserDefaults setBool:nativeCursorEffectsEnabled forKey:DefaultsKeyNativeCursorEffects];
     [self applyEnabledState];
 }
 
@@ -969,7 +996,7 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
 }
 
 - (void)rebuildOverlay {
-    BOOL wasVisible = self.isEnabled;
+    BOOL wasVisible = [self shouldRunOverlay];
 
     for (OverlayWindow *window in _windows) {
         [window orderOut:nil];
@@ -983,6 +1010,7 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
         newView.cursorSize = self.cursorSize;
         newView.image = _customImage;
         newView.effectStyle = self.effectStyle;
+        newView.stickerVisible = self.isEnabled;
 
         OverlayWindow *newWindow = [[OverlayWindow alloc] initWithFrame:frame];
         newWindow.contentView = newView;
@@ -999,7 +1027,7 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
 }
 
 - (void)applyEnabledState {
-    if (self.isEnabled) {
+    if ([self shouldRunOverlay]) {
         if (_windows.count == 0) {
             [self rebuildOverlay];
         }
@@ -1017,6 +1045,10 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     }
 
     [self applyCursorVisibility];
+}
+
+- (BOOL)shouldRunOverlay {
+    return self.isEnabled || self.nativeCursorEffectsEnabled;
 }
 
 - (void)startTimer {
@@ -1039,7 +1071,7 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
 }
 
 - (void)tick {
-    if (!self.isEnabled || _windows.count == 0) {
+    if (![self shouldRunOverlay] || _windows.count == 0) {
         return;
     }
 
@@ -1048,7 +1080,9 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     CursorView *activeView = [self viewForGlobalPoint:globalPoint localPoint:&localPoint];
 
     for (CursorView *view in _views) {
-        view.cursorVisible = view == activeView;
+        BOOL isActiveView = view == activeView;
+        view.cursorVisible = isActiveView;
+        view.stickerVisible = self.isEnabled && isActiveView;
     }
 
     if (activeView) {
@@ -1085,7 +1119,7 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
 }
 
 - (void)addPulse {
-    if (!self.isEnabled || _windows.count == 0) {
+    if (![self shouldRunOverlay] || _windows.count == 0) {
         return;
     }
 
@@ -1486,6 +1520,13 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     enabledItem.state = _cursorController.isEnabled ? NSControlStateValueOn : NSControlStateValueOff;
     [menu addItem:enabledItem];
 
+    NSMenuItem *nativeEffectsItem = [[NSMenuItem alloc] initWithTitle:@"Native Cursor Effects"
+                                                               action:@selector(toggleNativeCursorEffects:)
+                                                        keyEquivalent:@""];
+    nativeEffectsItem.target = self;
+    nativeEffectsItem.state = _cursorController.nativeCursorEffectsEnabled ? NSControlStateValueOn : NSControlStateValueOff;
+    [menu addItem:nativeEffectsItem];
+
     NSMenuItem *hideItem = [[NSMenuItem alloc] initWithTitle:@"Try Native Hide Cursor"
                                                       action:@selector(toggleHideSystemCursor:)
                                                keyEquivalent:@""];
@@ -1557,6 +1598,11 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
 
 - (void)toggleEnabled:(NSMenuItem *)sender {
     _cursorController.enabled = !_cursorController.isEnabled;
+    [self rebuildMenu];
+}
+
+- (void)toggleNativeCursorEffects:(NSMenuItem *)sender {
+    _cursorController.nativeCursorEffectsEnabled = !_cursorController.nativeCursorEffectsEnabled;
     [self rebuildMenu];
 }
 

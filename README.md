@@ -13,6 +13,8 @@ cd work/CartoonCursor
 
 The package script builds a universal macOS app and writes generated artifacts to `outputs/`.
 
+The app includes a separate native cursor effects toggle, so the original macOS cursor can keep click/trail effects even when the cartoon sticker overlay is hidden.
+
 ## Sticker Cutout Helpers
 
 The `work/cutout_*.py` scripts are local helpers for cutting sticker sheets into transparent PNG assets.
