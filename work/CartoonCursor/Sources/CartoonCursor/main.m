@@ -6,6 +6,7 @@
 
 static NSString * const DefaultsKeyEnabled = @"enabled";
 static NSString * const DefaultsKeyStickerWalkFollow = @"stickerWalkFollow";
+static NSString * const DefaultsKeyStickerFrameAnimation = @"stickerFrameAnimation";
 static NSString * const DefaultsKeyStickerWalkSpeed = @"stickerWalkSpeed";
 static NSString * const DefaultsKeyStickerWalkAmplitude = @"stickerWalkAmplitude";
 static NSString * const DefaultsKeyHideSystemCursor = @"hideSystemCursor";
@@ -181,6 +182,7 @@ static CGFloat CartoonClampedStickerWalkAmplitude(CGFloat amplitude) {
 @property(nonatomic, assign) BOOL cursorVisible;
 @property(nonatomic, assign) BOOL stickerVisible;
 @property(nonatomic, assign) BOOL stickerWalkFollowEnabled;
+@property(nonatomic, assign) BOOL stickerFrameAnimationEnabled;
 @property(nonatomic, assign) CGFloat stickerWalkSpeedMultiplier;
 @property(nonatomic, assign) CGFloat stickerWalkAmplitudeMultiplier;
 @property(nonatomic, assign) CursorEffectStyle effectStyle;
@@ -218,6 +220,7 @@ static CGFloat CartoonClampedStickerWalkAmplitude(CGFloat amplitude) {
     EffectColorMode _nativeEffectColorMode;
     BOOL _nativeCursorEffectsEnabled;
     BOOL _stickerWalkFollowEnabled;
+    BOOL _stickerFrameAnimationEnabled;
     BOOL _hasStickerDrawPoint;
     NSPoint _stickerDrawPoint;
     NSPoint _lastTrailAnchorPoint;
@@ -241,6 +244,7 @@ static CGFloat CartoonClampedStickerWalkAmplitude(CGFloat amplitude) {
     _cursorVisible = NO;
     _stickerVisible = NO;
     _stickerWalkFollowEnabled = NO;
+    _stickerFrameAnimationEnabled = NO;
     _stickerWalkSpeedMultiplier = DefaultStickerWalkSpeed;
     _stickerWalkAmplitudeMultiplier = DefaultStickerWalkAmplitude;
     _hasStickerDrawPoint = NO;
@@ -315,6 +319,12 @@ static CGFloat CartoonClampedStickerWalkAmplitude(CGFloat amplitude) {
 
 - (void)setStickerWalkFollowEnabled:(BOOL)stickerWalkFollowEnabled {
     _stickerWalkFollowEnabled = stickerWalkFollowEnabled;
+    [self resetStickerMotion];
+    self.needsDisplay = YES;
+}
+
+- (void)setStickerFrameAnimationEnabled:(BOOL)stickerFrameAnimationEnabled {
+    _stickerFrameAnimationEnabled = stickerFrameAnimationEnabled;
     [self resetStickerMotion];
     self.needsDisplay = YES;
 }
@@ -493,25 +503,53 @@ static CGFloat CartoonClampedStickerWalkAmplitude(CGFloat amplitude) {
 }
 
 - (void)applyStickerWalkPoseForRect:(NSRect)rect {
-    if (!_stickerWalkFollowEnabled || !self.stickerVisible) {
+    if (!self.stickerVisible || (!_stickerWalkFollowEnabled && !_stickerFrameAnimationEnabled)) {
         return;
     }
 
-    CGFloat intensity = MIN(1.0, _stickerWalkSpeed / MAX(260.0, self.cursorSize * 5.0));
-    if (intensity < 0.015) {
+    CGFloat motionIntensity = MIN(1.0, _stickerWalkSpeed / MAX(260.0, self.cursorSize * 5.0));
+    if (!_stickerFrameAnimationEnabled && motionIntensity < 0.015) {
         return;
     }
 
+    CGFloat intensity = motionIntensity;
     CGFloat step = sin(_stickerWalkPhase);
     CGFloat landing = fabs(step);
+    CGFloat tilt = _stickerWalkTilt;
+    CGFloat sideStep = 0;
+
+    if (_stickerFrameAnimationEnabled) {
+        static const CGFloat stepFrames[] = {0.00, 0.88, 0.48, 0.00, -0.36, 0.42};
+        static const CGFloat landingFrames[] = {0.72, 0.20, 0.44, 0.78, 0.24, 0.40};
+        static const CGFloat tiltFrames[] = {-0.10, -0.05, 0.04, 0.10, 0.05, -0.04};
+        static const CGFloat sideFrames[] = {-0.20, -0.08, 0.16, 0.20, 0.08, -0.16};
+        static const NSInteger frameCount = 6;
+
+        NSInteger frameIndex = 0;
+        if (_stickerWalkFollowEnabled && motionIntensity >= 0.015) {
+            CGFloat frameSize = (CGFloat)M_PI / 3.0;
+            frameIndex = ((NSInteger)floor(_stickerWalkPhase / frameSize)) % frameCount;
+        } else {
+            CGFloat frameRate = MAX(2.0, 6.0 * _stickerWalkSpeedMultiplier);
+            frameIndex = ((NSInteger)floor(NSDate.timeIntervalSinceReferenceDate * frameRate)) % frameCount;
+        }
+
+        step = stepFrames[frameIndex];
+        landing = landingFrames[frameIndex];
+        tilt = tiltFrames[frameIndex];
+        sideStep = sideFrames[frameIndex];
+        intensity = MAX(motionIntensity, _stickerWalkFollowEnabled ? 0.22 : 0.34);
+    }
+
     CGFloat amplitude = _stickerWalkAmplitudeMultiplier;
     CGFloat bob = step * self.cursorSize * 0.030 * intensity * amplitude;
     CGFloat squash = landing * 0.045 * intensity * amplitude;
     CGFloat stretch = squash * 0.42;
+    CGFloat side = sideStep * self.cursorSize * 0.020 * intensity * amplitude;
 
     NSAffineTransform *transform = [NSAffineTransform transform];
-    [transform translateXBy:NSMidX(rect) yBy:NSMidY(rect) + bob];
-    [transform rotateByRadians:_stickerWalkTilt * intensity * amplitude];
+    [transform translateXBy:NSMidX(rect) + side yBy:NSMidY(rect) + bob];
+    [transform rotateByRadians:tilt * intensity * amplitude];
     [transform scaleXBy:1.0 + stretch yBy:1.0 - squash];
     [transform translateXBy:-NSMidX(rect) yBy:-NSMidY(rect)];
     [transform concat];
@@ -1175,6 +1213,7 @@ static CGFloat CartoonClampedStickerWalkAmplitude(CGFloat amplitude) {
 @interface CursorController : NSObject
 @property(nonatomic, assign, getter=isEnabled) BOOL enabled;
 @property(nonatomic, assign) BOOL stickerWalkFollowEnabled;
+@property(nonatomic, assign) BOOL stickerFrameAnimationEnabled;
 @property(nonatomic, assign) CGFloat stickerWalkSpeedMultiplier;
 @property(nonatomic, assign) CGFloat stickerWalkAmplitudeMultiplier;
 @property(nonatomic, assign) BOOL nativeCursorEffectsEnabled;
@@ -1222,6 +1261,7 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     BOOL _needsAccessibilityPermission;
     BOOL _mouseCursorAssociated;
     BOOL _stickerWalkFollowEnabled;
+    BOOL _stickerFrameAnimationEnabled;
     CGFloat _stickerWalkSpeedMultiplier;
     CGFloat _stickerWalkAmplitudeMultiplier;
     BOOL _nativeCursorEffectsEnabled;
@@ -1284,6 +1324,13 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
         [defaults setBool:NO forKey:DefaultsKeyStickerWalkFollow];
     } else {
         _stickerWalkFollowEnabled = [defaults boolForKey:DefaultsKeyStickerWalkFollow];
+    }
+
+    if ([defaults objectForKey:DefaultsKeyStickerFrameAnimation] == nil) {
+        _stickerFrameAnimationEnabled = NO;
+        [defaults setBool:NO forKey:DefaultsKeyStickerFrameAnimation];
+    } else {
+        _stickerFrameAnimationEnabled = [defaults boolForKey:DefaultsKeyStickerFrameAnimation];
     }
 
     if ([defaults objectForKey:DefaultsKeyStickerWalkSpeed] == nil) {
@@ -1459,6 +1506,18 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     [NSUserDefaults.standardUserDefaults setBool:stickerWalkFollowEnabled forKey:DefaultsKeyStickerWalkFollow];
     for (CursorView *view in _views) {
         view.stickerWalkFollowEnabled = stickerWalkFollowEnabled;
+    }
+}
+
+- (BOOL)stickerFrameAnimationEnabled {
+    return _stickerFrameAnimationEnabled;
+}
+
+- (void)setStickerFrameAnimationEnabled:(BOOL)stickerFrameAnimationEnabled {
+    _stickerFrameAnimationEnabled = stickerFrameAnimationEnabled;
+    [NSUserDefaults.standardUserDefaults setBool:stickerFrameAnimationEnabled forKey:DefaultsKeyStickerFrameAnimation];
+    for (CursorView *view in _views) {
+        view.stickerFrameAnimationEnabled = stickerFrameAnimationEnabled;
     }
 }
 
@@ -1717,6 +1776,7 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
         newView.image = _customImage;
         newView.effectStyle = self.effectStyle;
         newView.stickerWalkFollowEnabled = self.stickerWalkFollowEnabled;
+        newView.stickerFrameAnimationEnabled = self.stickerFrameAnimationEnabled;
         newView.stickerWalkSpeedMultiplier = self.stickerWalkSpeedMultiplier;
         newView.stickerWalkAmplitudeMultiplier = self.stickerWalkAmplitudeMultiplier;
         newView.customTrailColors = self.customTrailColors;
@@ -2827,6 +2887,13 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     walkFollowItem.state = _cursorController.stickerWalkFollowEnabled ? NSControlStateValueOn : NSControlStateValueOff;
     [menu addItem:walkFollowItem];
 
+    NSMenuItem *frameAnimationItem = [[NSMenuItem alloc] initWithTitle:@"Sticker Frame Animation"
+                                                                action:@selector(toggleStickerFrameAnimation:)
+                                                         keyEquivalent:@""];
+    frameAnimationItem.target = self;
+    frameAnimationItem.state = _cursorController.stickerFrameAnimationEnabled ? NSControlStateValueOn : NSControlStateValueOff;
+    [menu addItem:frameAnimationItem];
+
     NSMenuItem *walkSpeedItem = [[NSMenuItem alloc] initWithTitle:@"Sticker Walk Speed"
                                                            action:nil
                                                     keyEquivalent:@""];
@@ -2974,6 +3041,11 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
 
 - (void)toggleStickerWalkFollow:(NSMenuItem *)sender {
     _cursorController.stickerWalkFollowEnabled = !_cursorController.stickerWalkFollowEnabled;
+    [self rebuildMenu];
+}
+
+- (void)toggleStickerFrameAnimation:(NSMenuItem *)sender {
+    _cursorController.stickerFrameAnimationEnabled = !_cursorController.stickerFrameAnimationEnabled;
     [self rebuildMenu];
 }
 
