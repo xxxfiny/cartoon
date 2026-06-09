@@ -632,6 +632,13 @@ static NSTimeInterval CartoonAnimationDelayFromProperties(NSDictionary *properti
         stretchFactor = 0.62;
         sideFactor = 0.055;
         rotationFactor = 1.18;
+
+        if (!_stickerWalkFollowEnabled) {
+            step = 0;
+            sideStep = 0;
+            tilt = 0;
+            rotationFactor = 0;
+        }
     }
 
     CGFloat amplitude = _stickerWalkAmplitudeMultiplier;
