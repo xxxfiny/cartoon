@@ -517,39 +517,46 @@ static CGFloat CartoonClampedStickerWalkAmplitude(CGFloat amplitude) {
     CGFloat landing = fabs(step);
     CGFloat tilt = _stickerWalkTilt;
     CGFloat sideStep = 0;
+    CGFloat bobFactor = 0.030;
+    CGFloat squashFactor = 0.045;
+    CGFloat stretchFactor = 0.42;
+    CGFloat sideFactor = 0.020;
+    CGFloat rotationFactor = 1.0;
 
     if (_stickerFrameAnimationEnabled) {
-        static const CGFloat stepFrames[] = {0.00, 0.88, 0.48, 0.00, -0.36, 0.42};
-        static const CGFloat landingFrames[] = {0.72, 0.20, 0.44, 0.78, 0.24, 0.40};
-        static const CGFloat tiltFrames[] = {-0.10, -0.05, 0.04, 0.10, 0.05, -0.04};
-        static const CGFloat sideFrames[] = {-0.20, -0.08, 0.16, 0.20, 0.08, -0.16};
+        static const CGFloat stepFrames[] = {0.05, 1.00, 0.58, -0.14, -0.78, 0.36};
+        static const CGFloat landingFrames[] = {0.92, 0.18, 0.36, 1.00, 0.28, 0.58};
+        static const CGFloat tiltFrames[] = {-0.24, -0.12, 0.10, 0.24, 0.12, -0.10};
+        static const CGFloat sideFrames[] = {-0.55, -0.25, 0.42, 0.55, 0.22, -0.38};
         static const NSInteger frameCount = 6;
 
-        NSInteger frameIndex = 0;
+        CGFloat frameRate = MAX(2.0, 4.8 * _stickerWalkSpeedMultiplier);
+        NSInteger frameIndex = ((NSInteger)floor(NSDate.timeIntervalSinceReferenceDate * frameRate)) % frameCount;
         if (_stickerWalkFollowEnabled && motionIntensity >= 0.015) {
-            CGFloat frameSize = (CGFloat)M_PI / 3.0;
-            frameIndex = ((NSInteger)floor(_stickerWalkPhase / frameSize)) % frameCount;
-        } else {
-            CGFloat frameRate = MAX(2.0, 6.0 * _stickerWalkSpeedMultiplier);
-            frameIndex = ((NSInteger)floor(NSDate.timeIntervalSinceReferenceDate * frameRate)) % frameCount;
+            frameIndex = (frameIndex + (NSInteger)floor(_stickerWalkPhase / (CGFloat)M_PI)) % frameCount;
         }
 
         step = stepFrames[frameIndex];
         landing = landingFrames[frameIndex];
         tilt = tiltFrames[frameIndex];
         sideStep = sideFrames[frameIndex];
-        intensity = MAX(motionIntensity, _stickerWalkFollowEnabled ? 0.22 : 0.34);
+        intensity = MAX(motionIntensity, _stickerWalkFollowEnabled ? 0.56 : 0.78);
+        bobFactor = 0.095;
+        squashFactor = 0.105;
+        stretchFactor = 0.62;
+        sideFactor = 0.055;
+        rotationFactor = 1.18;
     }
 
     CGFloat amplitude = _stickerWalkAmplitudeMultiplier;
-    CGFloat bob = step * self.cursorSize * 0.030 * intensity * amplitude;
-    CGFloat squash = landing * 0.045 * intensity * amplitude;
-    CGFloat stretch = squash * 0.42;
-    CGFloat side = sideStep * self.cursorSize * 0.020 * intensity * amplitude;
+    CGFloat bob = step * self.cursorSize * bobFactor * intensity * amplitude;
+    CGFloat squash = landing * squashFactor * intensity * amplitude;
+    CGFloat stretch = squash * stretchFactor;
+    CGFloat side = sideStep * self.cursorSize * sideFactor * intensity * amplitude;
 
     NSAffineTransform *transform = [NSAffineTransform transform];
     [transform translateXBy:NSMidX(rect) + side yBy:NSMidY(rect) + bob];
-    [transform rotateByRadians:tilt * intensity * amplitude];
+    [transform rotateByRadians:tilt * intensity * amplitude * rotationFactor];
     [transform scaleXBy:1.0 + stretch yBy:1.0 - squash];
     [transform translateXBy:-NSMidX(rect) yBy:-NSMidY(rect)];
     [transform concat];
