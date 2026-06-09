@@ -2,6 +2,7 @@
 #import <ApplicationServices/ApplicationServices.h>
 #import <CoreGraphics/CoreGraphics.h>
 #import <CoreGraphics/CGRemoteOperation.h>
+#import <ImageIO/ImageIO.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
 static NSString * const DefaultsKeyEnabled = @"enabled";
@@ -12,6 +13,7 @@ static NSString * const DefaultsKeyStickerWalkAmplitude = @"stickerWalkAmplitude
 static NSString * const DefaultsKeyHideSystemCursor = @"hideSystemCursor";
 static NSString * const DefaultsKeyCursorSize = @"cursorSize";
 static NSString * const DefaultsKeyImagePath = @"imagePath";
+static NSString * const DefaultsKeyStickerLibrary = @"stickerLibrary";
 static NSString * const DefaultsKeyVirtualCursor = @"virtualCursor";
 static NSString * const DefaultsKeyEffectStyle = @"effectStyle";
 static NSString * const DefaultsKeyEffectColorMode = @"effectColorMode";
@@ -119,6 +121,30 @@ static CGFloat CartoonClampedStickerWalkAmplitude(CGFloat amplitude) {
     return MAX(0.25, MIN(1.8, amplitude));
 }
 
+static NSTimeInterval CartoonAnimationDelayFromProperties(NSDictionary *properties) {
+    NSArray<NSDictionary *> *dictionaries = @[
+        properties[(__bridge NSString *)kCGImagePropertyGIFDictionary] ?: @{},
+        properties[(__bridge NSString *)kCGImagePropertyPNGDictionary] ?: @{}
+    ];
+
+    for (NSDictionary *dictionary in dictionaries) {
+        NSArray<NSString *> *keys = @[
+            (__bridge NSString *)kCGImagePropertyGIFUnclampedDelayTime,
+            (__bridge NSString *)kCGImagePropertyGIFDelayTime,
+            (__bridge NSString *)kCGImagePropertyAPNGUnclampedDelayTime,
+            (__bridge NSString *)kCGImagePropertyAPNGDelayTime
+        ];
+        for (NSString *key in keys) {
+            NSNumber *value = dictionary[key];
+            if ([value isKindOfClass:NSNumber.class] && value.doubleValue > 0) {
+                return MAX(0.035, value.doubleValue);
+            }
+        }
+    }
+
+    return 0.10;
+}
+
 @interface OverlayWindow : NSWindow
 - (instancetype)initWithFrame:(NSRect)frame;
 @end
@@ -179,6 +205,8 @@ static CGFloat CartoonClampedStickerWalkAmplitude(CGFloat amplitude) {
 @property(nonatomic, assign) NSPoint cursorPoint;
 @property(nonatomic, assign) CGFloat cursorSize;
 @property(nonatomic, strong) NSImage *image;
+@property(nonatomic, copy) NSArray<NSImage *> *animationFrames;
+@property(nonatomic, copy) NSArray<NSNumber *> *animationDurations;
 @property(nonatomic, assign) BOOL cursorVisible;
 @property(nonatomic, assign) BOOL stickerVisible;
 @property(nonatomic, assign) BOOL stickerWalkFollowEnabled;
@@ -216,6 +244,10 @@ static CGFloat CartoonClampedStickerWalkAmplitude(CGFloat amplitude) {
     NSArray<NSColor *> *_customNativeTrailColors;
     NSArray<NSColor *> *_customNativeClickColors;
     NSArray<NSColor *> *_customNativeParticleColors;
+    NSArray<NSImage *> *_animationFrames;
+    NSArray<NSNumber *> *_animationDurations;
+    NSTimeInterval _animationTotalDuration;
+    NSTimeInterval _animationStartTime;
     EffectColorMode _effectColorMode;
     EffectColorMode _nativeEffectColorMode;
     BOOL _nativeCursorEffectsEnabled;
@@ -259,6 +291,10 @@ static CGFloat CartoonClampedStickerWalkAmplitude(CGFloat amplitude) {
     _customNativeTrailColors = [self.class defaultEffectColors];
     _customNativeClickColors = [self.class defaultEffectColors];
     _customNativeParticleColors = [self.class defaultEffectColors];
+    _animationFrames = @[];
+    _animationDurations = @[];
+    _animationTotalDuration = 0;
+    _animationStartTime = NSDate.timeIntervalSinceReferenceDate;
     _pulses = [NSMutableArray array];
     _trailPoints = [NSMutableArray array];
     _autoEffectColors = [self.class defaultEffectColors];
@@ -297,6 +333,23 @@ static CGFloat CartoonClampedStickerWalkAmplitude(CGFloat amplitude) {
 - (void)setImage:(NSImage *)image {
     _image = image;
     [self refreshEffectColors];
+    self.needsDisplay = YES;
+}
+
+- (void)setAnimationFrames:(NSArray<NSImage *> *)animationFrames {
+    _animationFrames = [animationFrames copy] ?: @[];
+    _animationStartTime = NSDate.timeIntervalSinceReferenceDate;
+    self.needsDisplay = YES;
+}
+
+- (void)setAnimationDurations:(NSArray<NSNumber *> *)animationDurations {
+    _animationDurations = [animationDurations copy] ?: @[];
+    _animationTotalDuration = 0;
+    for (NSNumber *duration in _animationDurations) {
+        if ([duration isKindOfClass:NSNumber.class]) {
+            _animationTotalDuration += MAX(0.035, duration.doubleValue);
+        }
+    }
     self.needsDisplay = YES;
 }
 
@@ -626,11 +679,12 @@ static CGFloat CartoonClampedStickerWalkAmplitude(CGFloat amplitude) {
         return;
     }
 
-    if (self.image) {
-        NSRect drawRect = [self coverRectForImage:self.image];
+    NSImage *currentImage = [self currentStickerImage];
+    if (currentImage) {
+        NSRect drawRect = [self coverRectForImage:currentImage];
         [NSGraphicsContext saveGraphicsState];
         [self applyStickerWalkPoseForRect:drawRect];
-        [self drawCustomImage:self.image inRect:drawRect];
+        [self drawCustomImage:currentImage inRect:drawRect];
         [NSGraphicsContext restoreGraphicsState];
     } else {
         CGFloat size = self.cursorSize;
@@ -640,6 +694,24 @@ static CGFloat CartoonClampedStickerWalkAmplitude(CGFloat amplitude) {
         [self drawDefaultCartoonInRect:drawRect];
         [NSGraphicsContext restoreGraphicsState];
     }
+}
+
+- (NSImage *)currentStickerImage {
+    if (_animationFrames.count <= 1 || _animationDurations.count != _animationFrames.count || _animationTotalDuration <= 0) {
+        return self.image;
+    }
+
+    NSTimeInterval elapsed = fmod(MAX(0, NSDate.timeIntervalSinceReferenceDate - _animationStartTime), _animationTotalDuration);
+    NSTimeInterval cursor = 0;
+    for (NSInteger index = 0; index < (NSInteger)_animationFrames.count; index++) {
+        NSNumber *duration = _animationDurations[index];
+        cursor += MAX(0.035, duration.doubleValue);
+        if (elapsed <= cursor) {
+            return _animationFrames[index];
+        }
+    }
+
+    return _animationFrames.firstObject ?: self.image;
 }
 
 - (NSRect)coverRectForImage:(NSImage *)image {
@@ -1238,10 +1310,17 @@ static CGFloat CartoonClampedStickerWalkAmplitude(CGFloat amplitude) {
 @property(nonatomic, copy) NSArray<NSColor *> *customNativeTrailColors;
 @property(nonatomic, copy) NSArray<NSColor *> *customNativeClickColors;
 @property(nonatomic, copy) NSArray<NSColor *> *customNativeParticleColors;
+@property(nonatomic, copy, readonly) NSArray<NSDictionary *> *stickerLibrary;
+@property(nonatomic, copy, readonly) NSString *currentStickerIdentifier;
+@property(nonatomic, assign, readonly) BOOL usingDefaultCartoon;
 + (NSArray<NSNumber *> *)sizes;
 - (void)start;
 - (void)stop;
 - (void)loadImageFromURL:(NSURL *)url;
+- (void)importStickersFromURLs:(NSArray<NSURL *> *)urls;
+- (void)selectStickerWithIdentifier:(NSString *)identifier;
+- (void)removeStickerWithIdentifier:(NSString *)identifier;
+- (NSURL *)stickerLibraryDirectoryURL;
 - (void)useDefaultCartoon;
 - (CGEventRef)handleEventTapWithType:(CGEventType)type event:(CGEventRef)event;
 @end
@@ -1282,7 +1361,10 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     NSArray<NSColor *> *_customNativeTrailColors;
     NSArray<NSColor *> *_customNativeClickColors;
     NSArray<NSColor *> *_customNativeParticleColors;
+    NSMutableArray<NSDictionary *> *_stickerLibrary;
     NSImage *_customImage;
+    NSArray<NSImage *> *_customAnimationFrames;
+    NSArray<NSNumber *> *_customAnimationDurations;
 }
 
 + (NSArray<NSNumber *> *)sizes {
@@ -1311,6 +1393,51 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
         [hexStrings addObject:CartoonHexStringFromColor(color)];
     }
     return hexStrings;
+}
+
++ (NSDictionary *)animationDataFromURL:(NSURL *)url {
+    if (!url) {
+        return nil;
+    }
+
+    CGImageSourceRef source = CGImageSourceCreateWithURL((__bridge CFURLRef)url, NULL);
+    if (!source) {
+        return nil;
+    }
+
+    size_t frameCount = CGImageSourceGetCount(source);
+    if (frameCount <= 1) {
+        CFRelease(source);
+        return nil;
+    }
+
+    NSMutableArray<NSImage *> *frames = [NSMutableArray arrayWithCapacity:frameCount];
+    NSMutableArray<NSNumber *> *durations = [NSMutableArray arrayWithCapacity:frameCount];
+    for (size_t index = 0; index < frameCount; index++) {
+        CGImageRef cgImage = CGImageSourceCreateImageAtIndex(source, index, NULL);
+        if (!cgImage) {
+            continue;
+        }
+
+        NSSize size = NSMakeSize(CGImageGetWidth(cgImage), CGImageGetHeight(cgImage));
+        NSImage *frame = [[NSImage alloc] initWithCGImage:cgImage size:size];
+        CGImageRelease(cgImage);
+        if (!frame) {
+            continue;
+        }
+
+        NSDictionary *properties = (__bridge_transfer NSDictionary *)CGImageSourceCopyPropertiesAtIndex(source, index, NULL);
+        NSTimeInterval duration = CartoonAnimationDelayFromProperties(properties ?: @{});
+        [frames addObject:frame];
+        [durations addObject:@(duration)];
+    }
+
+    CFRelease(source);
+    if (frames.count <= 1 || frames.count != durations.count) {
+        return nil;
+    }
+
+    return @{@"frames": frames, @"durations": durations};
 }
 
 - (instancetype)init {
@@ -1474,9 +1601,21 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
         _nativeCursorEffectsEnabled = [defaults boolForKey:DefaultsKeyNativeCursorEffects];
     }
 
+    _stickerLibrary = [[self loadStickerLibraryFromDefaults] mutableCopy];
+
     NSString *imagePath = [defaults stringForKey:DefaultsKeyImagePath];
     if (imagePath.length > 0) {
-        _customImage = [[NSImage alloc] initWithContentsOfFile:imagePath];
+        NSURL *imageURL = [NSURL fileURLWithPath:imagePath];
+        NSDictionary *animationData = [self.class animationDataFromURL:imageURL];
+        _customAnimationFrames = animationData[@"frames"] ?: @[];
+        _customAnimationDurations = animationData[@"durations"] ?: @[];
+        _customImage = _customAnimationFrames.firstObject ?: [[NSImage alloc] initWithContentsOfFile:imagePath];
+    }
+    if (!_customAnimationFrames) {
+        _customAnimationFrames = @[];
+    }
+    if (!_customAnimationDurations) {
+        _customAnimationDurations = @[];
     }
 
     _hideDepthByDisplay = [NSMutableDictionary dictionary];
@@ -1495,6 +1634,86 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
 
 - (void)dealloc {
     [self stop];
+}
+
+- (NSURL *)stickerLibraryDirectoryURL {
+    NSFileManager *fileManager = NSFileManager.defaultManager;
+    NSURL *applicationSupportURL = [fileManager URLsForDirectory:NSApplicationSupportDirectory
+                                                       inDomains:NSUserDomainMask].firstObject;
+    if (!applicationSupportURL) {
+        applicationSupportURL = [NSURL fileURLWithPath:NSTemporaryDirectory()];
+    }
+    return [[applicationSupportURL URLByAppendingPathComponent:@"CartoonCursor" isDirectory:YES]
+        URLByAppendingPathComponent:@"Stickers" isDirectory:YES];
+}
+
+- (NSArray<NSDictionary *> *)loadStickerLibraryFromDefaults {
+    NSArray *storedItems = [NSUserDefaults.standardUserDefaults arrayForKey:DefaultsKeyStickerLibrary];
+    if (![storedItems isKindOfClass:NSArray.class]) {
+        return @[];
+    }
+
+    NSMutableArray<NSDictionary *> *items = [NSMutableArray array];
+    NSFileManager *fileManager = NSFileManager.defaultManager;
+    for (id candidate in storedItems) {
+        if (![candidate isKindOfClass:NSDictionary.class]) {
+            continue;
+        }
+
+        NSString *identifier = candidate[@"id"];
+        NSString *name = candidate[@"name"];
+        NSString *path = candidate[@"path"];
+        if (identifier.length == 0 || name.length == 0 || path.length == 0) {
+            continue;
+        }
+        if (![fileManager fileExistsAtPath:path]) {
+            continue;
+        }
+
+        [items addObject:@{@"id": identifier, @"name": name, @"path": path}];
+    }
+
+    return items;
+}
+
+- (void)saveStickerLibrary {
+    [NSUserDefaults.standardUserDefaults setObject:_stickerLibrary ?: @[] forKey:DefaultsKeyStickerLibrary];
+}
+
+- (NSArray<NSDictionary *> *)stickerLibrary {
+    return [_stickerLibrary copy] ?: @[];
+}
+
+- (NSDictionary *)stickerItemWithIdentifier:(NSString *)identifier {
+    if (identifier.length == 0) {
+        return nil;
+    }
+
+    for (NSDictionary *item in _stickerLibrary) {
+        if ([item[@"id"] isEqualToString:identifier]) {
+            return item;
+        }
+    }
+    return nil;
+}
+
+- (NSString *)currentStickerIdentifier {
+    NSString *currentPath = [NSUserDefaults.standardUserDefaults stringForKey:DefaultsKeyImagePath];
+    if (currentPath.length == 0) {
+        return nil;
+    }
+
+    for (NSDictionary *item in _stickerLibrary) {
+        if ([item[@"path"] isEqualToString:currentPath]) {
+            return item[@"id"];
+        }
+    }
+    return nil;
+}
+
+- (BOOL)usingDefaultCartoon {
+    NSString *currentPath = [NSUserDefaults.standardUserDefaults stringForKey:DefaultsKeyImagePath];
+    return currentPath.length == 0;
 }
 
 - (void)setEnabled:(BOOL)enabled {
@@ -1748,22 +1967,119 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
 
 - (void)loadImageFromURL:(NSURL *)url {
     NSImage *image = [[NSImage alloc] initWithContentsOfURL:url];
-    if (!image) {
+    NSDictionary *animationData = [self.class animationDataFromURL:url];
+    NSArray<NSImage *> *frames = animationData[@"frames"] ?: @[];
+    NSArray<NSNumber *> *durations = animationData[@"durations"] ?: @[];
+    NSImage *displayImage = frames.firstObject ?: image;
+    if (!displayImage) {
         return;
     }
 
-    _customImage = image;
+    _customImage = displayImage;
+    _customAnimationFrames = frames;
+    _customAnimationDurations = durations;
     [NSUserDefaults.standardUserDefaults setObject:url.path forKey:DefaultsKeyImagePath];
     for (CursorView *view in _views) {
-        view.image = image;
+        view.image = displayImage;
+        view.animationFrames = frames;
+        view.animationDurations = durations;
+    }
+}
+
+- (void)importStickersFromURLs:(NSArray<NSURL *> *)urls {
+    if (urls.count == 0) {
+        return;
+    }
+
+    NSURL *libraryDirectoryURL = [self stickerLibraryDirectoryURL];
+    NSFileManager *fileManager = NSFileManager.defaultManager;
+    NSError *directoryError = nil;
+    [fileManager createDirectoryAtURL:libraryDirectoryURL
+          withIntermediateDirectories:YES
+                           attributes:nil
+                                error:&directoryError];
+    if (directoryError) {
+        NSBeep();
+        return;
+    }
+
+    NSURL *lastImportedURL = nil;
+    if (!_stickerLibrary) {
+        _stickerLibrary = [NSMutableArray array];
+    }
+
+    for (NSURL *sourceURL in urls) {
+        if (![sourceURL isFileURL]) {
+            continue;
+        }
+
+        NSString *extension = sourceURL.pathExtension.lowercaseString;
+        NSString *safeExtension = extension.length > 0 ? extension : @"png";
+        NSString *identifier = NSUUID.UUID.UUIDString;
+        NSString *filename = [NSString stringWithFormat:@"%@.%@", identifier, safeExtension];
+        NSURL *destinationURL = [libraryDirectoryURL URLByAppendingPathComponent:filename];
+
+        NSError *copyError = nil;
+        if (![fileManager copyItemAtURL:sourceURL toURL:destinationURL error:&copyError]) {
+            continue;
+        }
+
+        NSString *name = sourceURL.URLByDeletingPathExtension.lastPathComponent;
+        if (name.length == 0) {
+            name = sourceURL.lastPathComponent ?: @"Sticker";
+        }
+
+        [_stickerLibrary addObject:@{@"id": identifier,
+                                     @"name": name,
+                                     @"path": destinationURL.path}];
+        lastImportedURL = destinationURL;
+    }
+
+    [self saveStickerLibrary];
+    if (lastImportedURL) {
+        [self loadImageFromURL:lastImportedURL];
+    }
+}
+
+- (void)selectStickerWithIdentifier:(NSString *)identifier {
+    NSDictionary *item = [self stickerItemWithIdentifier:identifier];
+    NSString *path = item[@"path"];
+    if (path.length == 0) {
+        return;
+    }
+
+    [self loadImageFromURL:[NSURL fileURLWithPath:path]];
+}
+
+- (void)removeStickerWithIdentifier:(NSString *)identifier {
+    NSDictionary *item = [self stickerItemWithIdentifier:identifier];
+    if (!item) {
+        return;
+    }
+
+    NSString *path = item[@"path"];
+    NSString *currentIdentifier = self.currentStickerIdentifier;
+    [_stickerLibrary removeObject:item];
+    [self saveStickerLibrary];
+
+    if (path.length > 0) {
+        [NSFileManager.defaultManager removeItemAtURL:[NSURL fileURLWithPath:path] error:nil];
+    }
+
+    if ([currentIdentifier isEqualToString:identifier]) {
+        [self useDefaultCartoon];
     }
 }
 
 - (void)useDefaultCartoon {
     _customImage = nil;
+    _customAnimationFrames = @[];
+    _customAnimationDurations = @[];
     [NSUserDefaults.standardUserDefaults removeObjectForKey:DefaultsKeyImagePath];
     for (CursorView *view in _views) {
         view.image = nil;
+        view.animationFrames = @[];
+        view.animationDurations = @[];
     }
 }
 
@@ -1781,6 +2097,8 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
         CursorView *newView = [[CursorView alloc] initWithFrame:NSMakeRect(0, 0, NSWidth(frame), NSHeight(frame))];
         newView.cursorSize = self.cursorSize;
         newView.image = _customImage;
+        newView.animationFrames = _customAnimationFrames;
+        newView.animationDurations = _customAnimationDurations;
         newView.effectStyle = self.effectStyle;
         newView.stickerWalkFollowEnabled = self.stickerWalkFollowEnabled;
         newView.stickerFrameAnimationEnabled = self.stickerFrameAnimationEnabled;
@@ -2877,6 +3195,81 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     ];
 }
 
+- (NSImage *)menuImageForStickerItem:(NSDictionary *)item {
+    NSString *path = item[@"path"];
+    if (path.length == 0) {
+        return nil;
+    }
+
+    NSImage *image = [[NSImage alloc] initWithContentsOfFile:path];
+    if (!image) {
+        return nil;
+    }
+
+    image.size = NSMakeSize(22, 22);
+    image.template = NO;
+    return image;
+}
+
+- (NSMenu *)stickerManagerMenu {
+    NSMenu *submenu = [[NSMenu alloc] init];
+
+    NSMenuItem *importItem = [[NSMenuItem alloc] initWithTitle:@"Import Stickers..."
+                                                        action:@selector(chooseImage:)
+                                                 keyEquivalent:@""];
+    importItem.target = self;
+    [submenu addItem:importItem];
+
+    NSMenuItem *defaultItem = [[NSMenuItem alloc] initWithTitle:@"Use Default Cartoon"
+                                                         action:@selector(useDefaultCartoon:)
+                                                  keyEquivalent:@""];
+    defaultItem.target = self;
+    defaultItem.state = _cursorController.usingDefaultCartoon ? NSControlStateValueOn : NSControlStateValueOff;
+    [submenu addItem:defaultItem];
+
+    [submenu addItem:NSMenuItem.separatorItem];
+
+    NSArray<NSDictionary *> *stickers = _cursorController.stickerLibrary;
+    NSString *currentIdentifier = _cursorController.currentStickerIdentifier;
+    if (stickers.count == 0) {
+        NSMenuItem *emptyItem = [[NSMenuItem alloc] initWithTitle:@"No Imported Stickers"
+                                                           action:nil
+                                                    keyEquivalent:@""];
+        emptyItem.enabled = NO;
+        [submenu addItem:emptyItem];
+    } else {
+        for (NSDictionary *item in stickers) {
+            NSString *identifier = item[@"id"];
+            NSString *title = item[@"name"] ?: @"Sticker";
+            NSMenuItem *stickerItem = [[NSMenuItem alloc] initWithTitle:title
+                                                                  action:@selector(selectSticker:)
+                                                           keyEquivalent:@""];
+            stickerItem.target = self;
+            stickerItem.representedObject = identifier;
+            stickerItem.state = [currentIdentifier isEqualToString:identifier] ? NSControlStateValueOn : NSControlStateValueOff;
+            stickerItem.image = [self menuImageForStickerItem:item];
+            [submenu addItem:stickerItem];
+        }
+    }
+
+    [submenu addItem:NSMenuItem.separatorItem];
+
+    NSMenuItem *deleteItem = [[NSMenuItem alloc] initWithTitle:@"Delete Current Sticker"
+                                                        action:@selector(deleteCurrentSticker:)
+                                                 keyEquivalent:@""];
+    deleteItem.target = self;
+    deleteItem.enabled = currentIdentifier.length > 0;
+    [submenu addItem:deleteItem];
+
+    NSMenuItem *revealItem = [[NSMenuItem alloc] initWithTitle:@"Reveal Sticker Folder"
+                                                        action:@selector(revealStickerFolder:)
+                                                 keyEquivalent:@""];
+    revealItem.target = self;
+    [submenu addItem:revealItem];
+
+    return submenu;
+}
+
 - (void)rebuildMenu {
     NSMenu *menu = [[NSMenu alloc] init];
 
@@ -2955,17 +3348,11 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
 
     [menu addItem:NSMenuItem.separatorItem];
 
-    NSMenuItem *chooseItem = [[NSMenuItem alloc] initWithTitle:@"Choose Cartoon Image..."
-                                                        action:@selector(chooseImage:)
-                                                 keyEquivalent:@""];
-    chooseItem.target = self;
-    [menu addItem:chooseItem];
-
-    NSMenuItem *defaultItem = [[NSMenuItem alloc] initWithTitle:@"Use Default Cartoon"
-                                                         action:@selector(useDefaultCartoon:)
-                                                  keyEquivalent:@""];
-    defaultItem.target = self;
-    [menu addItem:defaultItem];
+    NSMenuItem *stickerManagerItem = [[NSMenuItem alloc] initWithTitle:@"Sticker Manager"
+                                                                action:nil
+                                                         keyEquivalent:@""];
+    stickerManagerItem.submenu = [self stickerManagerMenu];
+    [menu addItem:stickerManagerItem];
 
     NSMenuItem *sizeItem = [[NSMenuItem alloc] initWithTitle:@"Size" action:nil keyEquivalent:@""];
     NSMenu *sizeMenu = [[NSMenu alloc] init];
@@ -3095,10 +3482,10 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     [NSApp activateIgnoringOtherApps:YES];
 
     NSOpenPanel *panel = [NSOpenPanel openPanel];
-    panel.title = @"Choose Cartoon Image";
+    panel.title = @"Import Stickers";
     panel.canChooseFiles = YES;
     panel.canChooseDirectories = NO;
-    panel.allowsMultipleSelection = NO;
+    panel.allowsMultipleSelection = YES;
     if (@available(macOS 12.0, *)) {
         panel.allowedContentTypes = @[UTTypeImage];
     } else {
@@ -3110,7 +3497,7 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
 
     __weak typeof(self) weakSelf = self;
     [panel beginWithCompletionHandler:^(NSModalResponse result) {
-        if (result != NSModalResponseOK || panel.URL == nil) {
+        if (result != NSModalResponseOK || panel.URLs.count == 0) {
             return;
         }
 
@@ -3119,9 +3506,38 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
             return;
         }
 
-        [strongSelf->_cursorController loadImageFromURL:panel.URL];
+        [strongSelf->_cursorController importStickersFromURLs:panel.URLs];
         [strongSelf rebuildMenu];
     }];
+}
+
+- (void)selectSticker:(NSMenuItem *)sender {
+    NSString *identifier = sender.representedObject;
+    if (![identifier isKindOfClass:NSString.class]) {
+        return;
+    }
+
+    [_cursorController selectStickerWithIdentifier:identifier];
+    [self rebuildMenu];
+}
+
+- (void)deleteCurrentSticker:(NSMenuItem *)sender {
+    NSString *identifier = _cursorController.currentStickerIdentifier;
+    if (identifier.length == 0) {
+        return;
+    }
+
+    [_cursorController removeStickerWithIdentifier:identifier];
+    [self rebuildMenu];
+}
+
+- (void)revealStickerFolder:(NSMenuItem *)sender {
+    NSURL *folderURL = [_cursorController stickerLibraryDirectoryURL];
+    [NSFileManager.defaultManager createDirectoryAtURL:folderURL
+                           withIntermediateDirectories:YES
+                                            attributes:nil
+                                                 error:nil];
+    [NSWorkspace.sharedWorkspace openURL:folderURL];
 }
 
 - (void)useDefaultCartoon:(NSMenuItem *)sender {
