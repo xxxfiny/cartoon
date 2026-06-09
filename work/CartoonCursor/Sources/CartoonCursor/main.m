@@ -776,10 +776,8 @@ static NSTimeInterval CartoonAnimationDelayFromProperties(NSDictionary *properti
 }
 
 - (NSRect)coverRectForSize:(NSSize)size {
-    // The system cursor hot spot sits at the arrow tip. Put that point near
-    // the sticker's upper-left area so the sticker visually covers the arrow.
-    CGFloat anchorX = 0.18;
-    CGFloat anchorY = 0.82;
+    CGFloat anchorX = _stickerWalkFollowEnabled ? 0.18 : 0.08;
+    CGFloat anchorY = _stickerWalkFollowEnabled ? 0.82 : 0.92;
 
     NSPoint anchorPoint = [self stickerAnchorPoint];
     return NSMakeRect(round(anchorPoint.x - size.width * anchorX),
