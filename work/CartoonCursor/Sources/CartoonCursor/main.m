@@ -231,6 +231,7 @@ static NSTimeInterval CartoonAnimationDelayFromProperties(NSDictionary *properti
 @implementation CursorView {
     NSMutableArray<Pulse *> *_pulses;
     NSMutableArray<TrailPoint *> *_trailPoints;
+    NSMutableArray<TrailPoint *> *_nativeTrailPoints;
     NSArray<NSColor *> *_autoEffectColors;
     NSArray<NSColor *> *_trailEffectColors;
     NSArray<NSColor *> *_clickEffectColors;
@@ -256,7 +257,9 @@ static NSTimeInterval CartoonAnimationDelayFromProperties(NSDictionary *properti
     BOOL _hasStickerDrawPoint;
     NSPoint _stickerDrawPoint;
     NSPoint _lastTrailAnchorPoint;
+    NSPoint _lastNativeTrailAnchorPoint;
     BOOL _hasTrailAnchorPoint;
+    BOOL _hasNativeTrailAnchorPoint;
     NSTimeInterval _lastStickerAnimationTime;
     CGFloat _stickerWalkPhase;
     CGFloat _stickerWalkSpeed;
@@ -264,6 +267,7 @@ static NSTimeInterval CartoonAnimationDelayFromProperties(NSDictionary *properti
     CGFloat _stickerWalkAmplitudeMultiplier;
     CGFloat _stickerWalkTilt;
     NSTimeInterval _lastTrailSampleTime;
+    NSTimeInterval _lastNativeTrailSampleTime;
 }
 
 - (instancetype)initWithFrame:(NSRect)frameRect {
@@ -297,6 +301,7 @@ static NSTimeInterval CartoonAnimationDelayFromProperties(NSDictionary *properti
     _animationStartTime = NSDate.timeIntervalSinceReferenceDate;
     _pulses = [NSMutableArray array];
     _trailPoints = [NSMutableArray array];
+    _nativeTrailPoints = [NSMutableArray array];
     _autoEffectColors = [self.class defaultEffectColors];
     _trailEffectColors = [self.class defaultEffectColors];
     _clickEffectColors = [self.class defaultEffectColors];
@@ -305,6 +310,7 @@ static NSTimeInterval CartoonAnimationDelayFromProperties(NSDictionary *properti
     _nativeClickEffectColors = [self.class defaultEffectColors];
     _nativeParticleEffectColors = [self.class defaultEffectColors];
     _lastTrailSampleTime = 0;
+    _lastNativeTrailSampleTime = 0;
     return self;
 }
 
@@ -316,12 +322,33 @@ static NSTimeInterval CartoonAnimationDelayFromProperties(NSDictionary *properti
     _cursorPoint = cursorPoint;
     [self updateStickerMotionTowardPoint:cursorPoint];
 
-    NSPoint trailPoint = [self trailAnchorPoint];
-    if (_hasTrailAnchorPoint) {
-        [self maybeAddTrailPointFromPreviousPoint:_lastTrailAnchorPoint toPoint:trailPoint];
+    if (self.stickerVisible) {
+        NSPoint trailPoint = [self trailAnchorPoint];
+        if (_hasTrailAnchorPoint) {
+            [self maybeAddTrailPointFromPreviousPoint:_lastTrailAnchorPoint
+                                              toPoint:trailPoint
+                                          trailPoints:_trailPoints
+                                       lastSampleTime:&_lastTrailSampleTime];
+        }
+        _lastTrailAnchorPoint = trailPoint;
+        _hasTrailAnchorPoint = YES;
+    } else {
+        _hasTrailAnchorPoint = NO;
     }
-    _lastTrailAnchorPoint = trailPoint;
-    _hasTrailAnchorPoint = YES;
+
+    if (_nativeCursorEffectsEnabled) {
+        if (_hasNativeTrailAnchorPoint) {
+            [self maybeAddTrailPointFromPreviousPoint:_lastNativeTrailAnchorPoint
+                                              toPoint:cursorPoint
+                                          trailPoints:_nativeTrailPoints
+                                       lastSampleTime:&_lastNativeTrailSampleTime];
+        }
+        _lastNativeTrailAnchorPoint = cursorPoint;
+        _hasNativeTrailAnchorPoint = YES;
+    } else {
+        _hasNativeTrailAnchorPoint = NO;
+    }
+
     self.needsDisplay = YES;
 }
 
@@ -357,6 +384,7 @@ static NSTimeInterval CartoonAnimationDelayFromProperties(NSDictionary *properti
     _cursorVisible = cursorVisible;
     if (!cursorVisible) {
         _hasTrailAnchorPoint = NO;
+        _hasNativeTrailAnchorPoint = NO;
         [self resetStickerMotion];
     }
     self.needsDisplay = YES;
@@ -395,6 +423,7 @@ static NSTimeInterval CartoonAnimationDelayFromProperties(NSDictionary *properti
     _effectStyle = effectStyle;
     if (![self shouldDrawTrail]) {
         [_trailPoints removeAllObjects];
+        [_nativeTrailPoints removeAllObjects];
     }
     self.needsDisplay = YES;
 }
@@ -425,6 +454,10 @@ static NSTimeInterval CartoonAnimationDelayFromProperties(NSDictionary *properti
 
 - (void)setNativeCursorEffectsEnabled:(BOOL)nativeCursorEffectsEnabled {
     _nativeCursorEffectsEnabled = nativeCursorEffectsEnabled;
+    if (!nativeCursorEffectsEnabled) {
+        [_nativeTrailPoints removeAllObjects];
+        _hasNativeTrailAnchorPoint = NO;
+    }
     self.needsDisplay = YES;
 }
 
@@ -644,7 +677,10 @@ static NSTimeInterval CartoonAnimationDelayFromProperties(NSDictionary *properti
         self.effectStyle == CursorEffectStyleSparklesTrail;
 }
 
-- (void)maybeAddTrailPointFromPreviousPoint:(NSPoint)previousPoint toPoint:(NSPoint)point {
+- (void)maybeAddTrailPointFromPreviousPoint:(NSPoint)previousPoint
+                                    toPoint:(NSPoint)point
+                                trailPoints:(NSMutableArray<TrailPoint *> *)trailPoints
+                             lastSampleTime:(NSTimeInterval *)lastSampleTime {
     if (!self.cursorVisible || ![self shouldDrawTrail]) {
         return;
     }
@@ -653,7 +689,8 @@ static NSTimeInterval CartoonAnimationDelayFromProperties(NSDictionary *properti
     CGFloat deltaX = point.x - previousPoint.x;
     CGFloat deltaY = point.y - previousPoint.y;
     CGFloat distance = hypot(deltaX, deltaY);
-    if (distance < 5.0 && now - _lastTrailSampleTime < 0.045) {
+    NSTimeInterval sampleTime = lastSampleTime ? *lastSampleTime : 0;
+    if (distance < 5.0 && now - sampleTime < 0.045) {
         return;
     }
 
@@ -661,11 +698,13 @@ static NSTimeInterval CartoonAnimationDelayFromProperties(NSDictionary *properti
     trailPoint.point = point;
     trailPoint.startTime = now;
     trailPoint.seed = (NSInteger)round(now * 1000.0) % 997;
-    [_trailPoints addObject:trailPoint];
-    _lastTrailSampleTime = now;
+    [trailPoints addObject:trailPoint];
+    if (lastSampleTime) {
+        *lastSampleTime = now;
+    }
 
-    if (_trailPoints.count > 42) {
-        [_trailPoints removeObjectsInRange:NSMakeRange(0, _trailPoints.count - 42)];
+    if (trailPoints.count > 42) {
+        [trailPoints removeObjectsInRange:NSMakeRange(0, trailPoints.count - 42)];
     }
 }
 
@@ -952,8 +991,12 @@ static NSTimeInterval CartoonAnimationDelayFromProperties(NSDictionary *properti
 }
 
 - (NSArray<NSColor *> *)effectColorsForRole:(EffectColorRole)role {
+    return [self effectColorsForRole:role target:self.nativeCursorEffectsEnabled ? EffectColorTargetNative : EffectColorTargetSticker];
+}
+
+- (NSArray<NSColor *> *)effectColorsForRole:(EffectColorRole)role target:(EffectColorTarget)target {
     NSArray<NSColor *> *colors = nil;
-    BOOL shouldUseNativeColors = self.nativeCursorEffectsEnabled;
+    BOOL shouldUseNativeColors = target == EffectColorTargetNative;
 
     switch (role) {
         case EffectColorRoleTrail:
@@ -972,6 +1015,15 @@ static NSTimeInterval CartoonAnimationDelayFromProperties(NSDictionary *properti
 
 - (NSColor *)effectColorForRole:(EffectColorRole)role index:(NSInteger)index alpha:(CGFloat)alpha {
     NSArray<NSColor *> *colors = [self effectColorsForRole:role];
+    NSColor *baseColor = colors[index % colors.count];
+    return [baseColor colorWithAlphaComponent:alpha];
+}
+
+- (NSColor *)effectColorForRole:(EffectColorRole)role
+                           index:(NSInteger)index
+                           alpha:(CGFloat)alpha
+                          target:(EffectColorTarget)target {
+    NSArray<NSColor *> *colors = [self effectColorsForRole:role target:target];
     NSColor *baseColor = colors[index % colors.count];
     return [baseColor colorWithAlphaComponent:alpha];
 }
@@ -1062,14 +1114,30 @@ static NSTimeInterval CartoonAnimationDelayFromProperties(NSDictionary *properti
 - (void)drawTrail {
     if (![self shouldDrawTrail]) {
         [_trailPoints removeAllObjects];
+        [_nativeTrailPoints removeAllObjects];
         return;
     }
 
+    if (self.stickerVisible) {
+        _trailPoints = [self activeTrailPointsByDrawingTrailPoints:_trailPoints target:EffectColorTargetSticker];
+    } else {
+        [_trailPoints removeAllObjects];
+    }
+
+    if (self.nativeCursorEffectsEnabled) {
+        _nativeTrailPoints = [self activeTrailPointsByDrawingTrailPoints:_nativeTrailPoints target:EffectColorTargetNative];
+    } else {
+        [_nativeTrailPoints removeAllObjects];
+    }
+}
+
+- (NSMutableArray<TrailPoint *> *)activeTrailPointsByDrawingTrailPoints:(NSMutableArray<TrailPoint *> *)trailPoints
+                                                                  target:(EffectColorTarget)target {
     NSTimeInterval now = NSDate.timeIntervalSinceReferenceDate;
     CGFloat duration = 0.62;
     NSMutableArray<TrailPoint *> *activeTrailPoints = [NSMutableArray array];
 
-    for (TrailPoint *trailPoint in _trailPoints) {
+    for (TrailPoint *trailPoint in trailPoints) {
         CGFloat age = (CGFloat)(now - trailPoint.startTime);
         if (age >= duration) {
             continue;
@@ -1080,25 +1148,27 @@ static NSTimeInterval CartoonAnimationDelayFromProperties(NSDictionary *properti
         CGFloat progress = age / duration;
         CGFloat fade = pow(1.0 - progress, 1.55);
         CGFloat size = MAX(5.0, self.cursorSize * (0.105 - progress * 0.045));
-        NSArray<NSColor *> *trailColors = [self effectColorsForRole:EffectColorRoleTrail];
+        NSArray<NSColor *> *trailColors = [self effectColorsForRole:EffectColorRoleTrail target:target];
         NSInteger colorIndex = trailPoint.seed % MAX(1, trailColors.count);
-        NSColor *color = [self effectColorForRole:EffectColorRoleTrail index:colorIndex alpha:0.42 * fade];
+        NSColor *color = [self effectColorForRole:EffectColorRoleTrail index:colorIndex alpha:0.42 * fade target:target];
 
         [self drawTrailBubbleAtPoint:trailPoint.point
                                 size:size
                                color:color
                                alpha:0.42 * fade
-                                seed:trailPoint.seed];
+                                seed:trailPoint.seed
+                              target:target];
     }
 
-    _trailPoints = activeTrailPoints;
+    return activeTrailPoints;
 }
 
 - (void)drawTrailBubbleAtPoint:(NSPoint)point
                           size:(CGFloat)size
                          color:(NSColor *)color
                          alpha:(CGFloat)alpha
-                          seed:(NSInteger)seed {
+                          seed:(NSInteger)seed
+                        target:(EffectColorTarget)target {
     CGFloat offset = sin((CGFloat)seed * 0.73) * size * 0.55;
     NSPoint bubblePoint = NSMakePoint(point.x + offset, point.y - size * 0.20);
     NSRect rect = NSMakeRect(bubblePoint.x - size / 2,
@@ -1110,7 +1180,7 @@ static NSTimeInterval CartoonAnimationDelayFromProperties(NSDictionary *properti
     [[NSBezierPath bezierPathWithOvalInRect:rect] fill];
 
     if (seed % 4 == 0) {
-        NSColor *accent = [self effectColorForRole:EffectColorRoleTrail index:seed % 5 alpha:alpha * 0.75];
+        NSColor *accent = [self effectColorForRole:EffectColorRoleTrail index:seed % 5 alpha:alpha * 0.75 target:target];
         [self drawStarAtPoint:NSMakePoint(bubblePoint.x + size * 0.66, bubblePoint.y + size * 0.18)
                          size:size * 0.86
                         color:accent
