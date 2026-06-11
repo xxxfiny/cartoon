@@ -1393,11 +1393,17 @@ internal sealed class OverlayForm : Form
             float timePhase = seconds * MathF.PI * 2f * Math.Max(0.2f, (float)settings.StickerWalkSpeedMultiplier * 0.82f);
             if (combinedFrameAndWalk)
             {
-                float targetBlend = Math.Clamp(motionIntensity * 1.35f, 0f, 1f);
-                _stickerPoseBlend = _stickerPoseBlend * 0.84f + targetBlend * 0.16f;
-                phase = timePhase * (0.90f - _stickerPoseBlend * 0.18f) + _stickerWalkPhase * _stickerPoseBlend * 0.55f;
-                motionIntensity = 0.24f + _stickerPoseBlend * 0.44f;
-                tilt = MathF.Sin(timePhase * 0.7f) * 0.06f + _stickerWalkTilt * _stickerPoseBlend * 0.18f;
+                float targetBlend = motionIntensity < 0.035f ? 0f : Math.Clamp(motionIntensity * 1.20f, 0f, 1f);
+                float blendAmount = targetBlend > _stickerPoseBlend ? 0.28f : 0.36f;
+                _stickerPoseBlend = _stickerPoseBlend * (1f - blendAmount) + targetBlend * blendAmount;
+                if (_stickerPoseBlend < 0.015f)
+                {
+                    _stickerPoseBlend = 0;
+                }
+
+                phase = _stickerWalkPhase + timePhase * 0.12f;
+                motionIntensity = _stickerPoseBlend;
+                tilt = _stickerWalkTilt * _stickerPoseBlend * 0.22f;
             }
             else
             {
@@ -1435,11 +1441,11 @@ internal sealed class OverlayForm : Form
             sideStep = sideFrames[frame];
         }
 
-        float bobFactor = combinedFrameAndWalk ? 0.052f : 0.085f;
-        float sideFactor = combinedFrameAndWalk ? 0.020f : 0.045f;
-        float squashFactor = combinedFrameAndWalk ? 0.030f : 0.070f;
-        float stretchFactor = combinedFrameAndWalk ? 0.025f : 0.055f;
-        float rotationFactor = combinedFrameAndWalk ? 10f : 22f;
+        float bobFactor = combinedFrameAndWalk ? 0.040f : 0.085f;
+        float sideFactor = combinedFrameAndWalk ? 0.014f : 0.045f;
+        float squashFactor = combinedFrameAndWalk ? 0.020f : 0.070f;
+        float stretchFactor = combinedFrameAndWalk ? 0.018f : 0.055f;
+        float rotationFactor = combinedFrameAndWalk ? 7f : 22f;
         float bob = -step * settings.CursorSize * bobFactor * motionIntensity * amplitude;
         float side = sideStep * settings.CursorSize * sideFactor * motionIntensity * amplitude;
         float squash = 1f + (landing - 0.5f) * squashFactor * motionIntensity * amplitude;
