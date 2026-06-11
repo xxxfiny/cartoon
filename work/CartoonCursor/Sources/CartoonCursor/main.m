@@ -3336,6 +3336,33 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     deleteItem.enabled = currentIdentifier.length > 0;
     [submenu addItem:deleteItem];
 
+    NSMenuItem *deleteSpecificItem = [[NSMenuItem alloc] initWithTitle:@"Delete Sticker"
+                                                                action:nil
+                                                         keyEquivalent:@""];
+    NSMenu *deleteSpecificMenu = [[NSMenu alloc] init];
+    if (stickers.count == 0) {
+        NSMenuItem *emptyDeleteItem = [[NSMenuItem alloc] initWithTitle:@"No Imported Stickers"
+                                                                 action:nil
+                                                          keyEquivalent:@""];
+        emptyDeleteItem.enabled = NO;
+        [deleteSpecificMenu addItem:emptyDeleteItem];
+    } else {
+        for (NSDictionary *item in stickers) {
+            NSString *identifier = item[@"id"];
+            NSString *title = item[@"name"] ?: @"Sticker";
+            NSMenuItem *itemToDelete = [[NSMenuItem alloc] initWithTitle:title
+                                                                   action:@selector(deleteSticker:)
+                                                            keyEquivalent:@""];
+            itemToDelete.target = self;
+            itemToDelete.representedObject = identifier;
+            itemToDelete.state = [currentIdentifier isEqualToString:identifier] ? NSControlStateValueOn : NSControlStateValueOff;
+            itemToDelete.image = [self menuImageForStickerItem:item];
+            [deleteSpecificMenu addItem:itemToDelete];
+        }
+    }
+    deleteSpecificItem.submenu = deleteSpecificMenu;
+    [submenu addItem:deleteSpecificItem];
+
     NSMenuItem *revealItem = [[NSMenuItem alloc] initWithTitle:@"Reveal Sticker Folder"
                                                         action:@selector(revealStickerFolder:)
                                                  keyEquivalent:@""];
@@ -3599,6 +3626,16 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
 - (void)deleteCurrentSticker:(NSMenuItem *)sender {
     NSString *identifier = _cursorController.currentStickerIdentifier;
     if (identifier.length == 0) {
+        return;
+    }
+
+    [_cursorController removeStickerWithIdentifier:identifier];
+    [self rebuildMenu];
+}
+
+- (void)deleteSticker:(NSMenuItem *)sender {
+    NSString *identifier = sender.representedObject;
+    if (![identifier isKindOfClass:NSString.class] || identifier.length == 0) {
         return;
     }
 
