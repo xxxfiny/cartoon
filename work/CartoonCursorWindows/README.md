@@ -10,6 +10,10 @@ A Windows tray-app version of Cartoon Cursor. It draws a transparent click-throu
 - PNG/JPG/GIF/BMP import. GIF stickers animate.
 - Cursor sizes from 32 px to 256 px.
 - Effects: Sparkles + Trail, Sparkles, Trail, Rings, Off.
+- Native cursor effects that can stay visible even when the sticker is disabled.
+- Separate sticker and native cursor color palettes for trail, click/ring, and sparkle particles.
+- Palette editor with four color slots, Hex/RGB inputs, and preset swatches.
+- Sticker walk follow, frame-style bobbing, speed choices, and amplitude choices.
 - Best-effort native cursor hiding using the Windows cursor display counter.
 
 ## Build On Windows

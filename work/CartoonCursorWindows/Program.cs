@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
+using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Windows.Forms;
@@ -27,6 +28,25 @@ internal enum CursorEffectStyle
     SparklesTrail = 4
 }
 
+internal enum EffectColorMode
+{
+    Auto = 0,
+    Custom = 1
+}
+
+internal enum EffectColorRole
+{
+    Trail = 0,
+    Click = 1,
+    Particle = 2
+}
+
+internal enum EffectColorTarget
+{
+    Sticker = 0,
+    Native = 1
+}
+
 internal sealed class StickerItem
 {
     public string Id { get; set; } = Guid.NewGuid().ToString("N");
@@ -38,10 +58,131 @@ internal sealed class AppSettings
 {
     public bool Enabled { get; set; } = true;
     public bool HideNativeCursor { get; set; }
+    public bool NativeCursorEffectsEnabled { get; set; }
+    public bool StickerWalkFollowEnabled { get; set; }
+    public bool StickerFrameAnimationEnabled { get; set; }
+    public double StickerWalkSpeedMultiplier { get; set; } = 1.0;
+    public double StickerWalkAmplitudeMultiplier { get; set; } = 1.0;
     public int CursorSize { get; set; } = 128;
     public CursorEffectStyle EffectStyle { get; set; } = CursorEffectStyle.SparklesTrail;
+    public EffectColorMode EffectColorMode { get; set; } = EffectColorMode.Auto;
+    public EffectColorMode NativeEffectColorMode { get; set; } = EffectColorMode.Auto;
+    public string[] CustomTrailColors { get; set; } = ColorPalettes.DefaultHexes();
+    public string[] CustomClickColors { get; set; } = ColorPalettes.DefaultHexes();
+    public string[] CustomParticleColors { get; set; } = ColorPalettes.DefaultHexes();
+    public string[] CustomNativeTrailColors { get; set; } = ColorPalettes.DefaultHexes();
+    public string[] CustomNativeClickColors { get; set; } = ColorPalettes.DefaultHexes();
+    public string[] CustomNativeParticleColors { get; set; } = ColorPalettes.DefaultHexes();
     public string? CurrentStickerPath { get; set; }
     public List<StickerItem> StickerLibrary { get; set; } = new();
+}
+
+internal static class ColorPalettes
+{
+    private static readonly string[] Defaults =
+    {
+        "#FF5C8A",
+        "#FFC640",
+        "#4EB2FF",
+        "#C468FF"
+    };
+
+    private static readonly string[] Presets =
+    {
+        "#000000",
+        "#FFFFFF",
+        "#7A7A7A",
+        "#FF5A8A",
+        "#FF3B30",
+        "#FF9500",
+        "#FFD60A",
+        "#34C759",
+        "#00C7BE",
+        "#32ADE6",
+        "#007AFF",
+        "#5856D6",
+        "#AF52DE",
+        "#FF9FCE",
+        "#B5E7FF",
+        "#C8F7C5"
+    };
+
+    public static string[] DefaultHexes() => Defaults.ToArray();
+
+    public static string[] PresetHexes() => Presets.ToArray();
+
+    public static Color[] DefaultColors() => Defaults.Select(HexToColorOrDefault).ToArray();
+
+    public static string[] NormalizeHexes(IEnumerable<string>? values)
+    {
+        List<string> normalized = new();
+        if (values is not null)
+        {
+            foreach (string value in values)
+            {
+                if (TryParseHex(value, out Color color))
+                {
+                    normalized.Add(HexFromColor(color));
+                    if (normalized.Count >= 4)
+                    {
+                        break;
+                    }
+                }
+            }
+        }
+
+        foreach (string fallback in Defaults)
+        {
+            if (normalized.Count >= 4)
+            {
+                break;
+            }
+            normalized.Add(fallback);
+        }
+
+        return normalized.ToArray();
+    }
+
+    public static Color[] NormalizeColors(IEnumerable<string>? values)
+    {
+        return NormalizeHexes(values).Select(HexToColorOrDefault).ToArray();
+    }
+
+    public static string HexFromColor(Color color) => $"#{color.R:X2}{color.G:X2}{color.B:X2}";
+
+    public static bool TryParseHex(string? value, out Color color)
+    {
+        color = Color.Empty;
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        string hex = value.Trim();
+        if (hex.StartsWith("#", StringComparison.Ordinal))
+        {
+            hex = hex[1..];
+        }
+
+        if (hex.Length == 3)
+        {
+            hex = string.Concat(hex.Select(character => new string(character, 2)));
+        }
+
+        if (hex.Length != 6 ||
+            !int.TryParse(hex, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out int rgb))
+        {
+            return false;
+        }
+
+        color = Color.FromArgb(255, (rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF);
+        return true;
+    }
+
+    private static Color HexToColorOrDefault(string value)
+    {
+        return TryParseHex(value, out Color color) ? color : Color.FromArgb(255, 255, 92, 138);
+    }
 }
 
 internal static class AppPaths
@@ -71,7 +212,9 @@ internal static class SettingsStore
             }
 
             string json = File.ReadAllText(AppPaths.SettingsPath);
-            return JsonSerializer.Deserialize<AppSettings>(json, Options) ?? new AppSettings();
+            AppSettings settings = JsonSerializer.Deserialize<AppSettings>(json, Options) ?? new AppSettings();
+            Normalize(settings);
+            return settings;
         }
         catch
         {
@@ -82,7 +225,22 @@ internal static class SettingsStore
     public static void Save(AppSettings settings)
     {
         Directory.CreateDirectory(AppPaths.Root);
+        Normalize(settings);
         File.WriteAllText(AppPaths.SettingsPath, JsonSerializer.Serialize(settings, Options));
+    }
+
+    private static void Normalize(AppSettings settings)
+    {
+        settings.StickerLibrary ??= new List<StickerItem>();
+        settings.CursorSize = Math.Clamp(settings.CursorSize, 24, 320);
+        settings.StickerWalkSpeedMultiplier = Math.Clamp(settings.StickerWalkSpeedMultiplier, 0.2, 3.0);
+        settings.StickerWalkAmplitudeMultiplier = Math.Clamp(settings.StickerWalkAmplitudeMultiplier, 0.1, 2.0);
+        settings.CustomTrailColors = ColorPalettes.NormalizeHexes(settings.CustomTrailColors);
+        settings.CustomClickColors = ColorPalettes.NormalizeHexes(settings.CustomClickColors);
+        settings.CustomParticleColors = ColorPalettes.NormalizeHexes(settings.CustomParticleColors);
+        settings.CustomNativeTrailColors = ColorPalettes.NormalizeHexes(settings.CustomNativeTrailColors);
+        settings.CustomNativeClickColors = ColorPalettes.NormalizeHexes(settings.CustomNativeClickColors);
+        settings.CustomNativeParticleColors = ColorPalettes.NormalizeHexes(settings.CustomNativeParticleColors);
     }
 }
 
@@ -144,9 +302,35 @@ internal sealed class CursorAppContext : ApplicationContext
             Checked = _settings.Enabled
         });
 
-        menu.Items.Add(BuildStickerManagerMenu());
-        menu.Items.Add(BuildSizeMenu());
-        menu.Items.Add(BuildEffectMenu());
+        menu.Items.Add(new ToolStripMenuItem("Sticker Walk Follow", null, (_, _) =>
+        {
+            _settings.StickerWalkFollowEnabled = !_settings.StickerWalkFollowEnabled;
+            SaveAndRefresh();
+        })
+        {
+            Checked = _settings.StickerWalkFollowEnabled
+        });
+
+        menu.Items.Add(new ToolStripMenuItem("Sticker Frame Animation", null, (_, _) =>
+        {
+            _settings.StickerFrameAnimationEnabled = !_settings.StickerFrameAnimationEnabled;
+            SaveAndRefresh();
+        })
+        {
+            Checked = _settings.StickerFrameAnimationEnabled
+        });
+
+        menu.Items.Add(BuildStickerWalkSpeedMenu());
+        menu.Items.Add(BuildStickerWalkAmplitudeMenu());
+
+        menu.Items.Add(new ToolStripMenuItem("Native Cursor Effects", null, (_, _) =>
+        {
+            _settings.NativeCursorEffectsEnabled = !_settings.NativeCursorEffectsEnabled;
+            SaveAndRefresh();
+        })
+        {
+            Checked = _settings.NativeCursorEffectsEnabled
+        });
 
         menu.Items.Add(new ToolStripMenuItem("Hide Native Cursor (Best Effort)", null, (_, _) =>
         {
@@ -158,10 +342,195 @@ internal sealed class CursorAppContext : ApplicationContext
         });
 
         menu.Items.Add(new ToolStripSeparator());
+
+        menu.Items.Add(BuildStickerManagerMenu());
+        menu.Items.Add(BuildSizeMenu());
+        menu.Items.Add(BuildEffectMenu());
+        menu.Items.Add(BuildEffectColorsMenu());
+
+        menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(new ToolStripMenuItem("Quit Cartoon Cursor", null, (_, _) => ExitThread()));
 
         _notifyIcon.ContextMenuStrip = menu;
         oldMenu?.Dispose();
+    }
+
+    private ToolStripMenuItem BuildStickerWalkSpeedMenu()
+    {
+        ToolStripMenuItem root = new("Sticker Walk Speed");
+        foreach ((string Title, double Value) option in new[]
+        {
+            ("Very Slow", 0.35),
+            ("Slow", 0.65),
+            ("Normal", 1.0),
+            ("Fast", 1.45),
+            ("Very Fast", 2.0)
+        })
+        {
+            root.DropDownItems.Add(new ToolStripMenuItem(option.Title, null, (_, _) =>
+            {
+                _settings.StickerWalkSpeedMultiplier = option.Value;
+                SaveAndRefresh();
+            })
+            {
+                Checked = Math.Abs(_settings.StickerWalkSpeedMultiplier - option.Value) < 0.01
+            });
+        }
+        return root;
+    }
+
+    private ToolStripMenuItem BuildStickerWalkAmplitudeMenu()
+    {
+        ToolStripMenuItem root = new("Sticker Walk Amplitude");
+        foreach ((string Title, double Value) option in new[]
+        {
+            ("Tiny", 0.35),
+            ("Small", 0.65),
+            ("Normal", 1.0),
+            ("Bouncy", 1.35)
+        })
+        {
+            root.DropDownItems.Add(new ToolStripMenuItem(option.Title, null, (_, _) =>
+            {
+                _settings.StickerWalkAmplitudeMultiplier = option.Value;
+                SaveAndRefresh();
+            })
+            {
+                Checked = Math.Abs(_settings.StickerWalkAmplitudeMultiplier - option.Value) < 0.01
+            });
+        }
+        return root;
+    }
+
+    private ToolStripMenuItem BuildEffectColorsMenu()
+    {
+        ToolStripMenuItem root = new("Effect Colors");
+        root.DropDownItems.Add(BuildEffectColorTargetMenu(EffectColorTarget.Sticker));
+        root.DropDownItems.Add(BuildEffectColorTargetMenu(EffectColorTarget.Native));
+        root.DropDownItems.Add(new ToolStripSeparator());
+        root.DropDownItems.Add(new ToolStripMenuItem("Reset All Custom Palettes", null, (_, _) =>
+        {
+            string[] defaults = ColorPalettes.DefaultHexes();
+            _settings.EffectColorMode = EffectColorMode.Custom;
+            _settings.NativeEffectColorMode = EffectColorMode.Custom;
+            _settings.CustomTrailColors = defaults.ToArray();
+            _settings.CustomClickColors = defaults.ToArray();
+            _settings.CustomParticleColors = defaults.ToArray();
+            _settings.CustomNativeTrailColors = defaults.ToArray();
+            _settings.CustomNativeClickColors = defaults.ToArray();
+            _settings.CustomNativeParticleColors = defaults.ToArray();
+            SaveAndRefresh();
+        }));
+        return root;
+    }
+
+    private ToolStripMenuItem BuildEffectColorTargetMenu(EffectColorTarget target)
+    {
+        ToolStripMenuItem root = new(target == EffectColorTarget.Sticker ? "Sticker Colors" : "Native Cursor Colors");
+        EffectColorMode currentMode = target == EffectColorTarget.Sticker ? _settings.EffectColorMode : _settings.NativeEffectColorMode;
+        foreach ((EffectColorMode Mode, string Title) option in new[]
+        {
+            (EffectColorMode.Auto, target == EffectColorTarget.Sticker ? "Auto From Sticker" : "Auto Default Colors"),
+            (EffectColorMode.Custom, "Custom Palettes")
+        })
+        {
+            root.DropDownItems.Add(new ToolStripMenuItem(option.Title, null, (_, _) =>
+            {
+                if (target == EffectColorTarget.Sticker)
+                {
+                    _settings.EffectColorMode = option.Mode;
+                }
+                else
+                {
+                    _settings.NativeEffectColorMode = option.Mode;
+                }
+                SaveAndRefresh();
+            })
+            {
+                Checked = currentMode == option.Mode
+            });
+        }
+
+        root.DropDownItems.Add(new ToolStripSeparator());
+        root.DropDownItems.Add(BuildPaletteEditorItem(target, EffectColorRole.Trail, "Trail Colors..."));
+        root.DropDownItems.Add(BuildPaletteEditorItem(target, EffectColorRole.Click, "Click Colors..."));
+        root.DropDownItems.Add(BuildPaletteEditorItem(target, EffectColorRole.Particle, "Sparkle Colors..."));
+        return root;
+    }
+
+    private ToolStripMenuItem BuildPaletteEditorItem(EffectColorTarget target, EffectColorRole role, string title)
+    {
+        return new ToolStripMenuItem(title, null, (_, _) => ShowPaletteEditor(target, role));
+    }
+
+    private void ShowPaletteEditor(EffectColorTarget target, EffectColorRole role)
+    {
+        string targetTitle = target == EffectColorTarget.Sticker ? "Sticker Colors" : "Native Cursor Colors";
+        string roleTitle = role switch
+        {
+            EffectColorRole.Trail => "Trail Colors",
+            EffectColorRole.Click => "Click Colors",
+            EffectColorRole.Particle => "Sparkle Colors",
+            _ => "Colors"
+        };
+
+        using PaletteEditorForm form = new($"{targetTitle} - {roleTitle}", GetCustomPalette(target, role));
+        if (form.ShowDialog() != DialogResult.OK)
+        {
+            return;
+        }
+
+        if (target == EffectColorTarget.Sticker)
+        {
+            _settings.EffectColorMode = EffectColorMode.Custom;
+        }
+        else
+        {
+            _settings.NativeEffectColorMode = EffectColorMode.Custom;
+        }
+
+        SetCustomPalette(target, role, form.PaletteHexes);
+        SaveAndRefresh();
+    }
+
+    private string[] GetCustomPalette(EffectColorTarget target, EffectColorRole role)
+    {
+        return (target, role) switch
+        {
+            (EffectColorTarget.Sticker, EffectColorRole.Trail) => _settings.CustomTrailColors,
+            (EffectColorTarget.Sticker, EffectColorRole.Click) => _settings.CustomClickColors,
+            (EffectColorTarget.Sticker, EffectColorRole.Particle) => _settings.CustomParticleColors,
+            (EffectColorTarget.Native, EffectColorRole.Trail) => _settings.CustomNativeTrailColors,
+            (EffectColorTarget.Native, EffectColorRole.Click) => _settings.CustomNativeClickColors,
+            (EffectColorTarget.Native, EffectColorRole.Particle) => _settings.CustomNativeParticleColors,
+            _ => ColorPalettes.DefaultHexes()
+        };
+    }
+
+    private void SetCustomPalette(EffectColorTarget target, EffectColorRole role, string[] colors)
+    {
+        string[] normalized = ColorPalettes.NormalizeHexes(colors);
+        switch (target, role)
+        {
+            case (EffectColorTarget.Sticker, EffectColorRole.Trail):
+                _settings.CustomTrailColors = normalized;
+                break;
+            case (EffectColorTarget.Sticker, EffectColorRole.Click):
+                _settings.CustomClickColors = normalized;
+                break;
+            case (EffectColorTarget.Sticker, EffectColorRole.Particle):
+                _settings.CustomParticleColors = normalized;
+                break;
+            case (EffectColorTarget.Native, EffectColorRole.Trail):
+                _settings.CustomNativeTrailColors = normalized;
+                break;
+            case (EffectColorTarget.Native, EffectColorRole.Click):
+                _settings.CustomNativeClickColors = normalized;
+                break;
+            case (EffectColorTarget.Native, EffectColorRole.Particle):
+                _settings.CustomNativeParticleColors = normalized;
+                break;
+        }
     }
 
     private ToolStripMenuItem BuildStickerManagerMenu()
@@ -477,23 +846,287 @@ internal sealed class CursorAppContext : ApplicationContext
     }
 }
 
+internal sealed class PaletteEditorForm : Form
+{
+    private readonly List<RowControls> _rows = new();
+    private bool _updating;
+    private string[] _draftHexes;
+
+    public string[] PaletteHexes { get; private set; }
+
+    public PaletteEditorForm(string title, IEnumerable<string> initialHexes)
+    {
+        Text = title;
+        FormBorderStyle = FormBorderStyle.FixedDialog;
+        MaximizeBox = false;
+        MinimizeBox = false;
+        ShowIcon = false;
+        ShowInTaskbar = false;
+        StartPosition = FormStartPosition.CenterScreen;
+        ClientSize = new Size(820, 370);
+        PaletteHexes = ColorPalettes.NormalizeHexes(initialHexes);
+        _draftHexes = PaletteHexes.ToArray();
+
+        Label hint = new()
+        {
+            Text = "Edit all four colors, then Apply.",
+            AutoSize = true,
+            Location = new Point(16, 14)
+        };
+        Controls.Add(hint);
+
+        TableLayoutPanel table = new()
+        {
+            Location = new Point(16, 44),
+            Size = new Size(790, 244),
+            ColumnCount = 7,
+            RowCount = 4
+        };
+        table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 70));
+        table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 54));
+        table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 96));
+        table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 52));
+        table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 52));
+        table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 52));
+        table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+
+        for (int index = 0; index < 4; index++)
+        {
+            ColorPalettes.TryParseHex(_draftHexes[index], out Color color);
+            AddRow(table, index, color);
+        }
+        Controls.Add(table);
+
+        Button reset = new()
+        {
+            Text = "Reset",
+            Location = new Point(16, 310),
+            Size = new Size(92, 34)
+        };
+        reset.Click += (_, _) => SetDraftPalette(ColorPalettes.DefaultHexes());
+        Controls.Add(reset);
+
+        Button cancel = new()
+        {
+            Text = "Cancel",
+            DialogResult = DialogResult.Cancel,
+            Location = new Point(596, 310),
+            Size = new Size(92, 34)
+        };
+        Controls.Add(cancel);
+
+        Button apply = new()
+        {
+            Text = "Apply",
+            DialogResult = DialogResult.OK,
+            Location = new Point(704, 310),
+            Size = new Size(92, 34)
+        };
+        apply.Click += (_, _) =>
+        {
+            PaletteHexes = ColorPalettes.NormalizeHexes(_draftHexes);
+        };
+        Controls.Add(apply);
+
+        AcceptButton = apply;
+        CancelButton = cancel;
+    }
+
+    private void AddRow(TableLayoutPanel table, int rowIndex, Color color)
+    {
+        Label label = new()
+        {
+            Text = $"Color {rowIndex + 1}",
+            AutoSize = true,
+            Anchor = AnchorStyles.Left
+        };
+        table.Controls.Add(label, 0, rowIndex);
+
+        Button swatch = new()
+        {
+            BackColor = color,
+            FlatStyle = FlatStyle.Popup,
+            Margin = new Padding(4, 8, 4, 8),
+            Size = new Size(40, 34)
+        };
+        swatch.Click += (_, _) => ChooseColor(rowIndex);
+        table.Controls.Add(swatch, 1, rowIndex);
+
+        TextBox hex = new()
+        {
+            Text = ColorPalettes.HexFromColor(color),
+            CharacterCasing = CharacterCasing.Upper,
+            Margin = new Padding(4, 10, 4, 8),
+            Width = 86
+        };
+        hex.Leave += (_, _) => ApplyHex(rowIndex);
+        hex.KeyDown += (_, args) =>
+        {
+            if (args.KeyCode == Keys.Enter)
+            {
+                ApplyHex(rowIndex);
+                args.SuppressKeyPress = true;
+            }
+        };
+        table.Controls.Add(hex, 2, rowIndex);
+
+        NumericUpDown red = BuildChannelInput(color.R);
+        NumericUpDown green = BuildChannelInput(color.G);
+        NumericUpDown blue = BuildChannelInput(color.B);
+        red.ValueChanged += (_, _) => ApplyChannels(rowIndex);
+        green.ValueChanged += (_, _) => ApplyChannels(rowIndex);
+        blue.ValueChanged += (_, _) => ApplyChannels(rowIndex);
+        table.Controls.Add(red, 3, rowIndex);
+        table.Controls.Add(green, 4, rowIndex);
+        table.Controls.Add(blue, 5, rowIndex);
+
+        FlowLayoutPanel presets = new()
+        {
+            FlowDirection = FlowDirection.LeftToRight,
+            Margin = new Padding(6, 8, 0, 4),
+            WrapContents = true,
+            AutoSize = false,
+            Size = new Size(402, 46)
+        };
+        foreach (string preset in ColorPalettes.PresetHexes())
+        {
+            Button chip = new()
+            {
+                BackColor = ColorPalettes.TryParseHex(preset, out Color presetColor) ? presetColor : Color.White,
+                FlatStyle = FlatStyle.Popup,
+                Size = new Size(20, 20),
+                Margin = new Padding(2),
+                Tag = preset
+            };
+            chip.Click += (_, _) => SetDraftColor(rowIndex, (string)chip.Tag);
+            presets.Controls.Add(chip);
+        }
+        table.Controls.Add(presets, 6, rowIndex);
+
+        _rows.Add(new RowControls(swatch, hex, red, green, blue));
+    }
+
+    private static NumericUpDown BuildChannelInput(int value)
+    {
+        return new NumericUpDown
+        {
+            Minimum = 0,
+            Maximum = 255,
+            Value = value,
+            Margin = new Padding(4, 9, 4, 8),
+            Width = 46
+        };
+    }
+
+    private void ChooseColor(int rowIndex)
+    {
+        if (!ColorPalettes.TryParseHex(_draftHexes[rowIndex], out Color currentColor))
+        {
+            currentColor = ColorPalettes.DefaultColors()[rowIndex];
+        }
+
+        using ColorDialog dialog = new()
+        {
+            AllowFullOpen = true,
+            FullOpen = true,
+            Color = currentColor
+        };
+        if (dialog.ShowDialog(this) == DialogResult.OK)
+        {
+            SetDraftColor(rowIndex, ColorPalettes.HexFromColor(dialog.Color));
+        }
+    }
+
+    private void ApplyHex(int rowIndex)
+    {
+        if (_updating)
+        {
+            return;
+        }
+
+        if (ColorPalettes.TryParseHex(_rows[rowIndex].Hex.Text, out Color color))
+        {
+            SetDraftColor(rowIndex, ColorPalettes.HexFromColor(color));
+        }
+        else
+        {
+            UpdateRow(rowIndex, _draftHexes[rowIndex]);
+        }
+    }
+
+    private void ApplyChannels(int rowIndex)
+    {
+        if (_updating)
+        {
+            return;
+        }
+
+        RowControls row = _rows[rowIndex];
+        Color color = Color.FromArgb(255, (int)row.Red.Value, (int)row.Green.Value, (int)row.Blue.Value);
+        SetDraftColor(rowIndex, ColorPalettes.HexFromColor(color));
+    }
+
+    private void SetDraftPalette(IEnumerable<string> hexes)
+    {
+        string[] normalized = ColorPalettes.NormalizeHexes(hexes);
+        for (int index = 0; index < 4; index++)
+        {
+            SetDraftColor(index, normalized[index]);
+        }
+    }
+
+    private void SetDraftColor(int rowIndex, string hex)
+    {
+        if (!ColorPalettes.TryParseHex(hex, out Color color))
+        {
+            return;
+        }
+
+        _draftHexes[rowIndex] = ColorPalettes.HexFromColor(color);
+        UpdateRow(rowIndex, _draftHexes[rowIndex]);
+    }
+
+    private void UpdateRow(int rowIndex, string hex)
+    {
+        if (!ColorPalettes.TryParseHex(hex, out Color color))
+        {
+            return;
+        }
+
+        _updating = true;
+        RowControls row = _rows[rowIndex];
+        row.Swatch.BackColor = color;
+        row.Hex.Text = ColorPalettes.HexFromColor(color);
+        row.Red.Value = color.R;
+        row.Green.Value = color.G;
+        row.Blue.Value = color.B;
+        _updating = false;
+    }
+
+    private sealed record RowControls(Button Swatch, TextBox Hex, NumericUpDown Red, NumericUpDown Green, NumericUpDown Blue);
+}
+
 internal sealed class OverlayForm : Form
 {
-    private readonly List<TrailPoint> _trailPoints = new();
+    private readonly List<TrailPoint> _stickerTrailPoints = new();
+    private readonly List<TrailPoint> _nativeTrailPoints = new();
     private readonly List<PulsePoint> _pulses = new();
-    private readonly Color[] _effectColors =
-    {
-        Color.FromArgb(255, 255, 92, 138),
-        Color.FromArgb(255, 255, 198, 64),
-        Color.FromArgb(255, 78, 178, 255),
-        Color.FromArgb(255, 196, 104, 255)
-    };
 
     private Image? _sticker;
     private Stream? _stickerStream;
-    private Point _lastCursorPoint;
-    private DateTime _lastTrailSample = DateTime.MinValue;
-    private bool _hasCursorPoint;
+    private Color[] _autoStickerColors = ColorPalettes.DefaultColors();
+    private PointF _lastStickerTrailPoint;
+    private PointF _lastNativeTrailPoint;
+    private PointF _stickerDrawPoint;
+    private DateTime _lastStickerTrailSample = DateTime.MinValue;
+    private DateTime _lastNativeTrailSample = DateTime.MinValue;
+    private DateTime _lastStickerAnimationTime = DateTime.MinValue;
+    private bool _hasStickerTrailPoint;
+    private bool _hasNativeTrailPoint;
+    private bool _hasStickerDrawPoint;
+    private float _stickerWalkPhase;
+    private float _stickerWalkSpeed;
+    private float _stickerWalkTilt;
 
     public OverlayForm()
     {
@@ -531,6 +1164,10 @@ internal sealed class OverlayForm : Form
         _stickerStream?.Dispose();
         _sticker = image;
         _stickerStream = backingStream;
+        _autoStickerColors = _sticker is not null ? ExtractEffectColors(_sticker) : ColorPalettes.DefaultColors();
+        _hasStickerDrawPoint = false;
+        _hasStickerTrailPoint = false;
+        _stickerTrailPoints.Clear();
 
         if (_sticker is not null && ImageAnimator.CanAnimate(_sticker))
         {
@@ -552,7 +1189,9 @@ internal sealed class OverlayForm : Form
             Bounds = bounds;
         }
 
-        if (!settings.Enabled && settings.EffectStyle == CursorEffectStyle.Off)
+        bool shouldRender = settings.Enabled ||
+            (settings.NativeCursorEffectsEnabled && settings.EffectStyle != CursorEffectStyle.Off);
+        if (!shouldRender)
         {
             Hide();
             return;
@@ -564,7 +1203,11 @@ internal sealed class OverlayForm : Form
         }
 
         PointF localCursor = new(screenCursor.X - bounds.Left, screenCursor.Y - bounds.Top);
-        MaybeAddTrail(localCursor, settings);
+        PointF stickerPoint = ResolveStickerPoint(localCursor, settings);
+        bool stickerTrailEnabled = settings.Enabled && ShouldDrawTrail(settings.EffectStyle);
+        bool nativeTrailEnabled = settings.NativeCursorEffectsEnabled && ShouldDrawTrail(settings.EffectStyle);
+        MaybeAddTrail(stickerPoint, stickerTrailEnabled, _stickerTrailPoints, ref _hasStickerTrailPoint, ref _lastStickerTrailPoint, ref _lastStickerTrailSample, settings);
+        MaybeAddTrail(localCursor, nativeTrailEnabled, _nativeTrailPoints, ref _hasNativeTrailPoint, ref _lastNativeTrailPoint, ref _lastNativeTrailSample, settings);
 
         using Bitmap canvas = new(Math.Max(1, bounds.Width), Math.Max(1, bounds.Height), PixelFormat.Format32bppArgb);
         using Graphics graphics = Graphics.FromImage(canvas);
@@ -572,49 +1215,137 @@ internal sealed class OverlayForm : Form
         graphics.SmoothingMode = SmoothingMode.AntiAlias;
         graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
 
-        DrawTrail(graphics, settings);
-        DrawPulses(graphics, settings);
+        DrawTrail(graphics, _stickerTrailPoints, ColorsForRole(settings, EffectColorRole.Trail, EffectColorTarget.Sticker), settings);
+        DrawTrail(graphics, _nativeTrailPoints, ColorsForRole(settings, EffectColorRole.Trail, EffectColorTarget.Native), settings);
+
+        bool stickerPulseEnabled = settings.Enabled && ShouldDrawClick(settings.EffectStyle);
+        bool nativePulseEnabled = settings.NativeCursorEffectsEnabled && ShouldDrawClick(settings.EffectStyle);
+        if (stickerPulseEnabled)
+        {
+            DrawPulses(
+                graphics,
+                settings,
+                ColorsForRole(settings, EffectColorRole.Click, EffectColorTarget.Sticker),
+                ColorsForRole(settings, EffectColorRole.Particle, EffectColorTarget.Sticker));
+        }
+        if (nativePulseEnabled)
+        {
+            DrawPulses(
+                graphics,
+                settings,
+                ColorsForRole(settings, EffectColorRole.Click, EffectColorTarget.Native),
+                ColorsForRole(settings, EffectColorRole.Particle, EffectColorTarget.Native));
+        }
+        CleanupPulses(stickerPulseEnabled || nativePulseEnabled);
 
         if (settings.Enabled)
         {
-            DrawSticker(graphics, localCursor, settings.CursorSize);
+            DrawSticker(graphics, stickerPoint, settings);
         }
 
         UpdateLayeredWindow(canvas, bounds.Location);
     }
 
-    private void MaybeAddTrail(PointF point, AppSettings settings)
+    private PointF ResolveStickerPoint(PointF cursorPoint, AppSettings settings)
     {
-        if (settings.EffectStyle != CursorEffectStyle.Trail && settings.EffectStyle != CursorEffectStyle.SparklesTrail)
+        if (!settings.Enabled || !settings.StickerWalkFollowEnabled)
         {
-            _trailPoints.Clear();
-            _hasCursorPoint = false;
+            _hasStickerDrawPoint = false;
+            _lastStickerAnimationTime = DateTime.UtcNow;
+            _stickerWalkSpeed = 0;
+            _stickerWalkTilt *= 0.72f;
+            return cursorPoint;
+        }
+
+        DateTime now = DateTime.UtcNow;
+        if (!_hasStickerDrawPoint || _lastStickerAnimationTime == DateTime.MinValue)
+        {
+            _stickerDrawPoint = cursorPoint;
+            _hasStickerDrawPoint = true;
+            _lastStickerAnimationTime = now;
+            _stickerWalkSpeed = 0;
+            _stickerWalkTilt = 0;
+            return _stickerDrawPoint;
+        }
+
+        double deltaSeconds = Math.Clamp((now - _lastStickerAnimationTime).TotalSeconds, 1.0 / 240.0, 1.0 / 20.0);
+        _lastStickerAnimationTime = now;
+
+        float dx = cursorPoint.X - _stickerDrawPoint.X;
+        float dy = cursorPoint.Y - _stickerDrawPoint.Y;
+        float distance = MathF.Sqrt(dx * dx + dy * dy);
+        if (distance > Math.Max(420f, settings.CursorSize * 5f))
+        {
+            _stickerDrawPoint = cursorPoint;
+            _stickerWalkSpeed = 0;
+            _stickerWalkTilt = 0;
+            return _stickerDrawPoint;
+        }
+
+        float followAmount = 1f - (float)Math.Exp(-deltaSeconds * 9.5 * settings.StickerWalkSpeedMultiplier);
+        PointF previousPoint = _stickerDrawPoint;
+        _stickerDrawPoint = new PointF(
+            _stickerDrawPoint.X + dx * followAmount,
+            _stickerDrawPoint.Y + dy * followAmount);
+
+        float moveX = _stickerDrawPoint.X - previousPoint.X;
+        float moveY = _stickerDrawPoint.Y - previousPoint.Y;
+        float moveDistance = MathF.Sqrt(moveX * moveX + moveY * moveY);
+        _stickerWalkSpeed = moveDistance / Math.Max(0.001f, (float)deltaSeconds);
+        _stickerWalkPhase += moveDistance / Math.Max(18f, settings.CursorSize * 0.42f) * MathF.PI;
+        if (_stickerWalkPhase > MathF.PI * 200f)
+        {
+            _stickerWalkPhase %= MathF.PI * 2f;
+        }
+
+        float targetTilt = Math.Clamp(moveX / Math.Max(1f, settings.CursorSize), -1f, 1f) * 0.26f;
+        _stickerWalkTilt = _stickerWalkTilt * 0.72f + targetTilt * 0.28f;
+        return _stickerDrawPoint;
+    }
+
+    private void MaybeAddTrail(
+        PointF point,
+        bool enabled,
+        List<TrailPoint> trailPoints,
+        ref bool hasTrailPoint,
+        ref PointF lastTrailPoint,
+        ref DateTime lastTrailSample,
+        AppSettings settings)
+    {
+        if (!enabled)
+        {
+            trailPoints.Clear();
+            hasTrailPoint = false;
             return;
         }
 
         DateTime now = DateTime.UtcNow;
-        if (_hasCursorPoint)
+        if (hasTrailPoint)
         {
-            float dx = point.X - _lastCursorPoint.X;
-            float dy = point.Y - _lastCursorPoint.Y;
+            float dx = point.X - lastTrailPoint.X;
+            float dy = point.Y - lastTrailPoint.Y;
             double distance = Math.Sqrt(dx * dx + dy * dy);
-            if (distance >= 5 || (now - _lastTrailSample).TotalMilliseconds >= 45)
+            if (distance >= 5 || (now - lastTrailSample).TotalMilliseconds >= 45)
             {
-                _trailPoints.Add(new TrailPoint(point, now, Environment.TickCount));
-                _lastTrailSample = now;
+                trailPoints.Add(new TrailPoint(point, now, Environment.TickCount));
+                lastTrailSample = now;
             }
         }
 
-        _lastCursorPoint = Point.Round(point);
-        _hasCursorPoint = true;
-        if (_trailPoints.Count > 48)
+        lastTrailPoint = point;
+        hasTrailPoint = true;
+        if (trailPoints.Count > 48)
         {
-            _trailPoints.RemoveRange(0, _trailPoints.Count - 48);
+            trailPoints.RemoveRange(0, trailPoints.Count - 48);
         }
     }
 
-    private void DrawSticker(Graphics graphics, PointF cursorPoint, int cursorSize)
+    private void DrawSticker(Graphics graphics, PointF cursorPoint, AppSettings settings)
     {
+        int cursorSize = settings.CursorSize;
+        float anchorX = settings.StickerWalkFollowEnabled ? 0.18f : 0.08f;
+        float anchorY = settings.StickerWalkFollowEnabled ? 0.82f : 0.92f;
+        RectangleF drawRect;
         if (_sticker is not null)
         {
             if (ImageAnimator.CanAnimate(_sticker))
@@ -626,37 +1357,77 @@ internal sealed class OverlayForm : Form
             float scale = cursorSize / Math.Max(1, maxEdge);
             float width = _sticker.Width * scale;
             float height = _sticker.Height * scale;
-            float x = cursorPoint.X - width * 0.08f;
-            float y = cursorPoint.Y - height * 0.92f;
-            graphics.DrawImage(_sticker, x, y, width, height);
+            drawRect = new RectangleF(cursorPoint.X - width * anchorX, cursorPoint.Y - height * anchorY, width, height);
+            using GraphicsStateScope state = new(graphics);
+            ApplyStickerPose(graphics, drawRect, settings);
+            graphics.DrawImage(_sticker, drawRect);
         }
         else
         {
             float size = cursorSize;
-            float x = cursorPoint.X - size * 0.08f;
-            float y = cursorPoint.Y - size * 0.92f;
-            RectangleF rect = new(x, y, size, size);
+            float x = cursorPoint.X - size * anchorX;
+            float y = cursorPoint.Y - size * anchorY;
+            drawRect = new RectangleF(x, y, size, size);
+            using GraphicsStateScope state = new(graphics);
+            ApplyStickerPose(graphics, drawRect, settings);
             using SolidBrush fill = new(Color.FromArgb(248, 255, 210, 84));
             using Pen pen = new(Color.FromArgb(210, 30, 30, 30), Math.Max(2, size * 0.045f));
-            graphics.FillEllipse(fill, rect);
-            graphics.DrawEllipse(pen, rect);
+            graphics.FillEllipse(fill, drawRect);
+            graphics.DrawEllipse(pen, drawRect);
             using SolidBrush eye = new(Color.FromArgb(230, 20, 20, 20));
             graphics.FillEllipse(eye, x + size * 0.32f, y + size * 0.40f, size * 0.10f, size * 0.14f);
             graphics.FillEllipse(eye, x + size * 0.58f, y + size * 0.40f, size * 0.10f, size * 0.14f);
         }
     }
 
-    private void DrawTrail(Graphics graphics, AppSettings settings)
+    private void ApplyStickerPose(Graphics graphics, RectangleF rect, AppSettings settings)
     {
-        if (settings.EffectStyle != CursorEffectStyle.Trail && settings.EffectStyle != CursorEffectStyle.SparklesTrail)
+        if (!settings.StickerWalkFollowEnabled && !settings.StickerFrameAnimationEnabled)
         {
-            _trailPoints.Clear();
             return;
         }
 
+        float motionIntensity = Math.Min(1f, _stickerWalkSpeed / Math.Max(260f, settings.CursorSize * 5f));
+        float phase = _stickerWalkPhase;
+        float tilt = _stickerWalkTilt;
+        if (settings.StickerFrameAnimationEnabled && !settings.StickerWalkFollowEnabled)
+        {
+            float seconds = Environment.TickCount64 / 1000f;
+            phase = seconds * MathF.PI * 2f * Math.Max(0.2f, (float)settings.StickerWalkSpeedMultiplier * 0.72f);
+            motionIntensity = 0.78f;
+            tilt = MathF.Sin(phase * 0.7f) * 0.10f;
+        }
+        else if (settings.StickerFrameAnimationEnabled)
+        {
+            motionIntensity = Math.Max(motionIntensity, 0.56f);
+        }
+
+        if (motionIntensity < 0.015f)
+        {
+            return;
+        }
+
+        float amplitude = (float)settings.StickerWalkAmplitudeMultiplier;
+        float step = MathF.Sin(phase);
+        float landing = MathF.Abs(MathF.Cos(phase));
+        float bob = -step * settings.CursorSize * 0.045f * motionIntensity * amplitude;
+        float side = MathF.Sin(phase * 0.5f) * settings.CursorSize * 0.025f * motionIntensity * amplitude;
+        float squash = 1f + (landing - 0.5f) * 0.035f * motionIntensity * amplitude;
+        float stretch = 1f - (landing - 0.5f) * 0.030f * motionIntensity * amplitude;
+        float centerX = rect.Left + rect.Width / 2f;
+        float centerY = rect.Top + rect.Height / 2f;
+
+        graphics.TranslateTransform(centerX + side, centerY + bob);
+        graphics.RotateTransform(tilt * 18f);
+        graphics.ScaleTransform(squash, stretch);
+        graphics.TranslateTransform(-centerX, -centerY);
+    }
+
+    private void DrawTrail(Graphics graphics, List<TrailPoint> trailPoints, Color[] colors, AppSettings settings)
+    {
         DateTime now = DateTime.UtcNow;
         List<TrailPoint> active = new();
-        foreach (TrailPoint point in _trailPoints)
+        foreach (TrailPoint point in trailPoints)
         {
             float age = (float)(now - point.StartTime).TotalSeconds;
             if (age > 0.62f)
@@ -668,7 +1439,7 @@ internal sealed class OverlayForm : Form
             float progress = age / 0.62f;
             float fade = MathF.Pow(1f - progress, 1.55f);
             float size = Math.Max(5f, settings.CursorSize * (0.105f - progress * 0.045f));
-            Color color = WithAlpha(_effectColors[Math.Abs(point.Seed) % _effectColors.Length], (int)(120 * fade));
+            Color color = WithAlpha(colors[Math.Abs(point.Seed) % colors.Length], (int)(120 * fade));
             using SolidBrush brush = new(color);
             float offset = MathF.Sin(point.Seed * 0.73f) * size * 0.55f;
             graphics.FillEllipse(brush, point.Point.X + offset - size / 2, point.Point.Y - size * 0.70f, size, size);
@@ -678,22 +1449,13 @@ internal sealed class OverlayForm : Form
                 DrawStar(graphics, point.Point.X + offset + size * 0.35f, point.Point.Y - size * 0.55f, size * 0.42f, color);
             }
         }
-        _trailPoints.Clear();
-        _trailPoints.AddRange(active);
+        trailPoints.Clear();
+        trailPoints.AddRange(active);
     }
 
-    private void DrawPulses(Graphics graphics, AppSettings settings)
+    private void DrawPulses(Graphics graphics, AppSettings settings, Color[] clickColors, Color[] particleColors)
     {
-        if (settings.EffectStyle != CursorEffectStyle.Rings &&
-            settings.EffectStyle != CursorEffectStyle.Sparkles &&
-            settings.EffectStyle != CursorEffectStyle.SparklesTrail)
-        {
-            _pulses.Clear();
-            return;
-        }
-
         DateTime now = DateTime.UtcNow;
-        List<PulsePoint> active = new();
         foreach (PulsePoint pulse in _pulses)
         {
             float age = (float)(now - pulse.StartTime).TotalSeconds;
@@ -702,24 +1464,34 @@ internal sealed class OverlayForm : Form
                 continue;
             }
 
-            active.Add(pulse);
             float progress = age / 0.86f;
             float eased = 1f - MathF.Pow(1f - progress, 3f);
             float fade = MathF.Pow(Math.Max(0, 1f - progress), 1.4f);
             float radius = Math.Max(34f, settings.CursorSize * 0.33f) * (0.58f + eased * 1.2f);
-            using Pen ring = new(WithAlpha(_effectColors[0], (int)(118 * fade)), Math.Max(2f, settings.CursorSize * 0.020f));
+            Color ringColor = WithAlpha(clickColors[Math.Abs(pulse.Seed) % clickColors.Length], (int)(118 * fade));
+            using Pen ring = new(ringColor, Math.Max(2f, settings.CursorSize * 0.020f));
             graphics.DrawEllipse(ring, pulse.Point.X - radius, pulse.Point.Y - radius, radius * 2, radius * 2);
 
             if (settings.EffectStyle == CursorEffectStyle.Sparkles || settings.EffectStyle == CursorEffectStyle.SparklesTrail)
             {
-                DrawPulseParticles(graphics, pulse, settings, eased, fade);
+                DrawPulseParticles(graphics, pulse, settings, eased, fade, particleColors);
             }
         }
-        _pulses.Clear();
-        _pulses.AddRange(active);
     }
 
-    private void DrawPulseParticles(Graphics graphics, PulsePoint pulse, AppSettings settings, float eased, float fade)
+    private void CleanupPulses(bool keepActive)
+    {
+        if (!keepActive)
+        {
+            _pulses.Clear();
+            return;
+        }
+
+        DateTime now = DateTime.UtcNow;
+        _pulses.RemoveAll(pulse => (now - pulse.StartTime).TotalSeconds > 0.86);
+    }
+
+    private void DrawPulseParticles(Graphics graphics, PulsePoint pulse, AppSettings settings, float eased, float fade, Color[] colors)
     {
         int count = 10;
         float baseRadius = Math.Max(34f, settings.CursorSize * 0.33f);
@@ -731,7 +1503,7 @@ internal sealed class OverlayForm : Form
             PointF particle = new(
                 pulse.Point.X + MathF.Cos(angle) * travel,
                 pulse.Point.Y + MathF.Sin(angle) * travel);
-            Color color = WithAlpha(_effectColors[index % _effectColors.Length], (int)(220 * fade));
+            Color color = WithAlpha(colors[index % colors.Length], (int)(220 * fade));
             if (index % 2 == 0)
             {
                 DrawStar(graphics, particle.X, particle.Y, Math.Max(5, baseRadius * 0.12f), color);
@@ -743,6 +1515,50 @@ internal sealed class OverlayForm : Form
                 graphics.FillEllipse(brush, particle.X - size / 2, particle.Y - size / 2, size, size);
             }
         }
+    }
+
+    private Color[] ColorsForRole(AppSettings settings, EffectColorRole role, EffectColorTarget target)
+    {
+        if (target == EffectColorTarget.Native)
+        {
+            if (settings.NativeEffectColorMode != EffectColorMode.Custom)
+            {
+                return ColorPalettes.DefaultColors();
+            }
+
+            return role switch
+            {
+                EffectColorRole.Trail => ColorPalettes.NormalizeColors(settings.CustomNativeTrailColors),
+                EffectColorRole.Click => ColorPalettes.NormalizeColors(settings.CustomNativeClickColors),
+                EffectColorRole.Particle => ColorPalettes.NormalizeColors(settings.CustomNativeParticleColors),
+                _ => ColorPalettes.DefaultColors()
+            };
+        }
+
+        if (settings.EffectColorMode != EffectColorMode.Custom)
+        {
+            return _autoStickerColors.Length >= 4 ? _autoStickerColors : ColorPalettes.DefaultColors();
+        }
+
+        return role switch
+        {
+            EffectColorRole.Trail => ColorPalettes.NormalizeColors(settings.CustomTrailColors),
+            EffectColorRole.Click => ColorPalettes.NormalizeColors(settings.CustomClickColors),
+            EffectColorRole.Particle => ColorPalettes.NormalizeColors(settings.CustomParticleColors),
+            _ => ColorPalettes.DefaultColors()
+        };
+    }
+
+    private static bool ShouldDrawTrail(CursorEffectStyle style)
+    {
+        return style == CursorEffectStyle.Trail || style == CursorEffectStyle.SparklesTrail;
+    }
+
+    private static bool ShouldDrawClick(CursorEffectStyle style)
+    {
+        return style == CursorEffectStyle.Rings ||
+            style == CursorEffectStyle.Sparkles ||
+            style == CursorEffectStyle.SparklesTrail;
     }
 
     private static void DrawStar(Graphics graphics, float centerX, float centerY, float radius, Color color)
@@ -762,6 +1578,103 @@ internal sealed class OverlayForm : Form
     private static Color WithAlpha(Color color, int alpha)
     {
         return Color.FromArgb(Math.Clamp(alpha, 0, 255), color.R, color.G, color.B);
+    }
+
+    private static Color[] ExtractEffectColors(Image image)
+    {
+        try
+        {
+            int sampleWidth = Math.Clamp(image.Width, 1, 140);
+            int sampleHeight = Math.Clamp(image.Height, 1, 140);
+            using Bitmap sample = new(sampleWidth, sampleHeight, PixelFormat.Format32bppArgb);
+            using (Graphics graphics = Graphics.FromImage(sample))
+            {
+                graphics.Clear(Color.Transparent);
+                graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                graphics.DrawImage(image, 0, 0, sampleWidth, sampleHeight);
+            }
+
+            Dictionary<int, ColorBucket> buckets = new();
+            for (int y = 0; y < sample.Height; y += 2)
+            {
+                for (int x = 0; x < sample.Width; x += 2)
+                {
+                    Color pixel = sample.GetPixel(x, y);
+                    if (pixel.A < 128)
+                    {
+                        continue;
+                    }
+
+                    bool nearWhite = pixel.R > 242 && pixel.G > 242 && pixel.B > 242;
+                    if (nearWhite)
+                    {
+                        continue;
+                    }
+
+                    int key = (pixel.R / 32) << 10 | (pixel.G / 32) << 5 | (pixel.B / 32);
+                    if (!buckets.TryGetValue(key, out ColorBucket? bucket))
+                    {
+                        bucket = new ColorBucket();
+                        buckets[key] = bucket;
+                    }
+                    bucket.Add(pixel);
+                }
+            }
+
+            List<ColorBucket> ranked = buckets.Values
+                .OrderByDescending(bucket => bucket.Score)
+                .ToList();
+            List<Color> selected = new();
+            int darkCount = 0;
+            foreach (ColorBucket bucket in ranked)
+            {
+                Color color = bucket.AverageColor;
+                bool isDark = color.GetBrightness() < 0.20f;
+                if (isDark && darkCount >= 1)
+                {
+                    continue;
+                }
+
+                bool tooClose = selected.Any(existing => ColorDistance(existing, color) < 46);
+                if (tooClose)
+                {
+                    continue;
+                }
+
+                selected.Add(color);
+                if (isDark)
+                {
+                    darkCount++;
+                }
+                if (selected.Count >= 4)
+                {
+                    break;
+                }
+            }
+
+            foreach (Color fallback in ColorPalettes.DefaultColors())
+            {
+                if (selected.Count >= 4)
+                {
+                    break;
+                }
+                selected.Add(fallback);
+            }
+
+            return selected.ToArray();
+        }
+        catch
+        {
+            return ColorPalettes.DefaultColors();
+        }
+    }
+
+    private static double ColorDistance(Color a, Color b)
+    {
+        int dr = a.R - b.R;
+        int dg = a.G - b.G;
+        int db = a.B - b.B;
+        return Math.Sqrt(dr * dr + dg * dg + db * db);
     }
 
     private void OnFrameChanged(object? sender, EventArgs e)
@@ -824,6 +1737,56 @@ internal sealed class OverlayForm : Form
 
     private readonly record struct TrailPoint(PointF Point, DateTime StartTime, int Seed);
     private readonly record struct PulsePoint(PointF Point, DateTime StartTime, int Seed);
+
+    private sealed class GraphicsStateScope : IDisposable
+    {
+        private readonly Graphics _graphics;
+        private readonly GraphicsState _state;
+
+        public GraphicsStateScope(Graphics graphics)
+        {
+            _graphics = graphics;
+            _state = graphics.Save();
+        }
+
+        public void Dispose()
+        {
+            _graphics.Restore(_state);
+        }
+    }
+
+    private sealed class ColorBucket
+    {
+        private long _red;
+        private long _green;
+        private long _blue;
+
+        public int Count { get; private set; }
+
+        public Color AverageColor => Count <= 0
+            ? Color.Black
+            : Color.FromArgb(255, (int)(_red / Count), (int)(_green / Count), (int)(_blue / Count));
+
+        public double Score
+        {
+            get
+            {
+                Color color = AverageColor;
+                double saturation = color.GetSaturation();
+                double brightness = color.GetBrightness();
+                double darkPenalty = brightness < 0.16 ? 0.36 : 1.0;
+                return Count * (0.42 + saturation) * darkPenalty;
+            }
+        }
+
+        public void Add(Color color)
+        {
+            _red += color.R;
+            _green += color.G;
+            _blue += color.B;
+            Count++;
+        }
+    }
 }
 
 internal sealed class MouseHook : IDisposable
