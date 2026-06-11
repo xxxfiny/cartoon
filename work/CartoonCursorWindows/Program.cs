@@ -1384,16 +1384,23 @@ internal sealed class OverlayForm : Form
         float phase = _stickerWalkPhase;
         float tilt = _stickerWalkTilt;
         bool useFramePose = settings.StickerFrameAnimationEnabled;
-        if (settings.StickerFrameAnimationEnabled && !settings.StickerWalkFollowEnabled)
+        if (settings.StickerFrameAnimationEnabled)
         {
             float seconds = Environment.TickCount64 / 1000f;
-            phase = seconds * MathF.PI * 2f * Math.Max(0.2f, (float)settings.StickerWalkSpeedMultiplier * 0.82f);
-            motionIntensity = 0.92f;
-            tilt = MathF.Sin(phase * 0.7f) * 0.16f;
-        }
-        else if (settings.StickerFrameAnimationEnabled)
-        {
-            motionIntensity = Math.Max(motionIntensity, 0.68f);
+            float timePhase = seconds * MathF.PI * 2f * Math.Max(0.2f, (float)settings.StickerWalkSpeedMultiplier * 0.82f);
+            if (settings.StickerWalkFollowEnabled)
+            {
+                float movementBlend = Math.Clamp(motionIntensity * 1.6f, 0f, 1f);
+                phase = timePhase + _stickerWalkPhase * (0.35f + movementBlend * 0.65f);
+                motionIntensity = Math.Max(motionIntensity, 0.78f);
+                tilt = _stickerWalkTilt * 0.45f + MathF.Sin(timePhase * 0.7f) * 0.12f;
+            }
+            else
+            {
+                phase = timePhase;
+                motionIntensity = 0.92f;
+                tilt = MathF.Sin(timePhase * 0.7f) * 0.16f;
+            }
         }
 
         if (motionIntensity < 0.015f)
@@ -1408,13 +1415,14 @@ internal sealed class OverlayForm : Form
         if (useFramePose)
         {
             int frame = (int)MathF.Floor((phase / (MathF.PI * 2f) % 1f + 1f) % 1f * 6f);
+            float carriedTilt = tilt;
             float[] stepFrames = { 0.00f, 0.92f, 0.48f, -0.24f, -0.86f, 0.38f };
             float[] landingFrames = { 1.00f, 0.22f, 0.52f, 0.96f, 0.30f, 0.62f };
             float[] tiltFrames = { -0.22f, -0.12f, 0.12f, 0.24f, 0.10f, -0.14f };
             float[] sideFrames = { -0.52f, -0.24f, 0.38f, 0.56f, 0.20f, -0.36f };
             step = stepFrames[frame];
             landing = landingFrames[frame];
-            tilt = tiltFrames[frame];
+            tilt = tiltFrames[frame] + carriedTilt * 0.35f;
             sideStep = sideFrames[frame];
         }
 
