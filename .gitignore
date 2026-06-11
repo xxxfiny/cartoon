@@ -5,6 +5,8 @@ __pycache__/
 # Build products and generated sticker assets
 outputs/
 work/CartoonCursor/.build/
+work/CartoonCursorWindows/bin/
+work/CartoonCursorWindows/obj/
 work/puppy_test_43/
 
 # Local editor/system files

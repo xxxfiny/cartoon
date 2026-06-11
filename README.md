@@ -34,6 +34,13 @@ cd work\CartoonCursorWindows
 
 The Windows package script writes generated artifacts to `outputs/windows/`.
 
+You can also verify the Windows build in GitHub Actions without installing Windows locally:
+
+1. Push to GitHub.
+2. Open the repository's Actions tab.
+3. Open the latest "Windows Build" run.
+4. Download the `CartoonCursor-win-x64` or `CartoonCursor-win-arm64` artifact.
+
 ## Sticker Cutout Helpers
 
 The `work/cutout_*.py` scripts are local helpers for cutting sticker sheets into transparent PNG assets.
