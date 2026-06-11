@@ -1115,12 +1115,17 @@ internal sealed class OverlayForm : Form
     private Image? _sticker;
     private Stream? _stickerStream;
     private Color[] _autoStickerColors = ColorPalettes.DefaultColors();
+    private FrameDimension? _stickerFrameDimension;
+    private int[] _stickerFrameDelaysMs = Array.Empty<int>();
+    private int _stickerFrameCount = 1;
+    private int _stickerFrameIndex;
     private PointF _lastStickerTrailPoint;
     private PointF _lastNativeTrailPoint;
     private PointF _stickerDrawPoint;
     private DateTime _lastStickerTrailSample = DateTime.MinValue;
     private DateTime _lastNativeTrailSample = DateTime.MinValue;
     private DateTime _lastStickerAnimationTime = DateTime.MinValue;
+    private DateTime _lastStickerFrameUpdate = DateTime.MinValue;
     private bool _hasStickerTrailPoint;
     private bool _hasNativeTrailPoint;
     private bool _hasStickerDrawPoint;
@@ -1155,24 +1160,15 @@ internal sealed class OverlayForm : Form
 
     public void SetSticker(Image? image, Stream? backingStream)
     {
-        if (_sticker is not null && ImageAnimator.CanAnimate(_sticker))
-        {
-            ImageAnimator.StopAnimate(_sticker, OnFrameChanged);
-        }
-
         _sticker?.Dispose();
         _stickerStream?.Dispose();
         _sticker = image;
         _stickerStream = backingStream;
         _autoStickerColors = _sticker is not null ? ExtractEffectColors(_sticker) : ColorPalettes.DefaultColors();
+        ResetStickerFrameState();
         _hasStickerDrawPoint = false;
         _hasStickerTrailPoint = false;
         _stickerTrailPoints.Clear();
-
-        if (_sticker is not null && ImageAnimator.CanAnimate(_sticker))
-        {
-            ImageAnimator.Animate(_sticker, OnFrameChanged);
-        }
     }
 
     public void AddPulse(Point screenPoint)
@@ -1348,10 +1344,7 @@ internal sealed class OverlayForm : Form
         RectangleF drawRect;
         if (_sticker is not null)
         {
-            if (ImageAnimator.CanAnimate(_sticker))
-            {
-                ImageAnimator.UpdateFrames(_sticker);
-            }
+            UpdateStickerFrame(settings);
 
             float maxEdge = Math.Max(_sticker.Width, _sticker.Height);
             float scale = cursorSize / Math.Max(1, maxEdge);
@@ -1390,16 +1383,17 @@ internal sealed class OverlayForm : Form
         float motionIntensity = Math.Min(1f, _stickerWalkSpeed / Math.Max(260f, settings.CursorSize * 5f));
         float phase = _stickerWalkPhase;
         float tilt = _stickerWalkTilt;
+        bool useFramePose = settings.StickerFrameAnimationEnabled;
         if (settings.StickerFrameAnimationEnabled && !settings.StickerWalkFollowEnabled)
         {
             float seconds = Environment.TickCount64 / 1000f;
-            phase = seconds * MathF.PI * 2f * Math.Max(0.2f, (float)settings.StickerWalkSpeedMultiplier * 0.72f);
-            motionIntensity = 0.78f;
-            tilt = MathF.Sin(phase * 0.7f) * 0.10f;
+            phase = seconds * MathF.PI * 2f * Math.Max(0.2f, (float)settings.StickerWalkSpeedMultiplier * 0.82f);
+            motionIntensity = 0.92f;
+            tilt = MathF.Sin(phase * 0.7f) * 0.16f;
         }
         else if (settings.StickerFrameAnimationEnabled)
         {
-            motionIntensity = Math.Max(motionIntensity, 0.56f);
+            motionIntensity = Math.Max(motionIntensity, 0.68f);
         }
 
         if (motionIntensity < 0.015f)
@@ -1410,15 +1404,29 @@ internal sealed class OverlayForm : Form
         float amplitude = (float)settings.StickerWalkAmplitudeMultiplier;
         float step = MathF.Sin(phase);
         float landing = MathF.Abs(MathF.Cos(phase));
-        float bob = -step * settings.CursorSize * 0.045f * motionIntensity * amplitude;
-        float side = MathF.Sin(phase * 0.5f) * settings.CursorSize * 0.025f * motionIntensity * amplitude;
-        float squash = 1f + (landing - 0.5f) * 0.035f * motionIntensity * amplitude;
-        float stretch = 1f - (landing - 0.5f) * 0.030f * motionIntensity * amplitude;
+        float sideStep = MathF.Sin(phase * 0.5f);
+        if (useFramePose)
+        {
+            int frame = (int)MathF.Floor((phase / (MathF.PI * 2f) % 1f + 1f) % 1f * 6f);
+            float[] stepFrames = { 0.00f, 0.92f, 0.48f, -0.24f, -0.86f, 0.38f };
+            float[] landingFrames = { 1.00f, 0.22f, 0.52f, 0.96f, 0.30f, 0.62f };
+            float[] tiltFrames = { -0.22f, -0.12f, 0.12f, 0.24f, 0.10f, -0.14f };
+            float[] sideFrames = { -0.52f, -0.24f, 0.38f, 0.56f, 0.20f, -0.36f };
+            step = stepFrames[frame];
+            landing = landingFrames[frame];
+            tilt = tiltFrames[frame];
+            sideStep = sideFrames[frame];
+        }
+
+        float bob = -step * settings.CursorSize * 0.085f * motionIntensity * amplitude;
+        float side = sideStep * settings.CursorSize * 0.045f * motionIntensity * amplitude;
+        float squash = 1f + (landing - 0.5f) * 0.070f * motionIntensity * amplitude;
+        float stretch = 1f - (landing - 0.5f) * 0.055f * motionIntensity * amplitude;
         float centerX = rect.Left + rect.Width / 2f;
         float centerY = rect.Top + rect.Height / 2f;
 
         graphics.TranslateTransform(centerX + side, centerY + bob);
-        graphics.RotateTransform(tilt * 18f);
+        graphics.RotateTransform(tilt * 22f);
         graphics.ScaleTransform(squash, stretch);
         graphics.TranslateTransform(-centerX, -centerY);
     }
@@ -1677,9 +1685,123 @@ internal sealed class OverlayForm : Form
         return Math.Sqrt(dr * dr + dg * dg + db * db);
     }
 
-    private void OnFrameChanged(object? sender, EventArgs e)
+    private void ResetStickerFrameState()
     {
-        // The main timer redraws the layered window.
+        _stickerFrameDimension = null;
+        _stickerFrameDelaysMs = Array.Empty<int>();
+        _stickerFrameCount = 1;
+        _stickerFrameIndex = 0;
+        _lastStickerFrameUpdate = DateTime.UtcNow;
+
+        if (_sticker is null)
+        {
+            return;
+        }
+
+        try
+        {
+            Guid[] frameDimensions = _sticker.FrameDimensionsList;
+            if (frameDimensions.Length == 0)
+            {
+                return;
+            }
+
+            FrameDimension dimension = new(frameDimensions[0]);
+            int frameCount = _sticker.GetFrameCount(dimension);
+            if (frameCount <= 1)
+            {
+                return;
+            }
+
+            _stickerFrameDimension = dimension;
+            _stickerFrameCount = frameCount;
+            _stickerFrameDelaysMs = ReadFrameDelays(_sticker, frameCount);
+            _sticker.SelectActiveFrame(dimension, 0);
+        }
+        catch
+        {
+            _stickerFrameDimension = null;
+            _stickerFrameDelaysMs = Array.Empty<int>();
+            _stickerFrameCount = 1;
+            _stickerFrameIndex = 0;
+        }
+    }
+
+    private void UpdateStickerFrame(AppSettings settings)
+    {
+        if (_sticker is null || _stickerFrameDimension is null || _stickerFrameCount <= 1)
+        {
+            return;
+        }
+
+        if (!settings.StickerFrameAnimationEnabled)
+        {
+            if (_stickerFrameIndex != 0)
+            {
+                _stickerFrameIndex = 0;
+                TrySelectStickerFrame(0);
+            }
+            _lastStickerFrameUpdate = DateTime.UtcNow;
+            return;
+        }
+
+        DateTime now = DateTime.UtcNow;
+        int delay = _stickerFrameDelaysMs.Length > _stickerFrameIndex
+            ? _stickerFrameDelaysMs[_stickerFrameIndex]
+            : 90;
+        double speed = Math.Clamp(settings.StickerWalkSpeedMultiplier, 0.35, 2.0);
+        double scaledDelay = Math.Max(24, delay / speed);
+        double elapsed = (now - _lastStickerFrameUpdate).TotalMilliseconds;
+        if (elapsed < scaledDelay)
+        {
+            return;
+        }
+
+        int steps = Math.Max(1, (int)Math.Floor(elapsed / scaledDelay));
+        _stickerFrameIndex = (_stickerFrameIndex + steps) % _stickerFrameCount;
+        TrySelectStickerFrame(_stickerFrameIndex);
+        _lastStickerFrameUpdate = now;
+    }
+
+    private void TrySelectStickerFrame(int index)
+    {
+        if (_sticker is null || _stickerFrameDimension is null)
+        {
+            return;
+        }
+
+        try
+        {
+            _sticker.SelectActiveFrame(_stickerFrameDimension, index);
+        }
+        catch
+        {
+            _stickerFrameDimension = null;
+            _stickerFrameCount = 1;
+            _stickerFrameIndex = 0;
+            _stickerFrameDelaysMs = Array.Empty<int>();
+        }
+    }
+
+    private static int[] ReadFrameDelays(Image image, int frameCount)
+    {
+        int[] delays = Enumerable.Repeat(90, frameCount).ToArray();
+        try
+        {
+            const int frameDelayPropertyId = 0x5100;
+            PropertyItem property = image.GetPropertyItem(frameDelayPropertyId);
+            byte[] bytes = property.Value;
+            for (int index = 0; index < frameCount && index * 4 + 3 < bytes.Length; index++)
+            {
+                int hundredths = BitConverter.ToInt32(bytes, index * 4);
+                delays[index] = Math.Clamp(hundredths * 10, 24, 800);
+            }
+        }
+        catch
+        {
+            // Static images and some runtimes do not expose GIF frame delays.
+        }
+        return delays;
     }
 
     private void UpdateLayeredWindow(Bitmap bitmap, Point screenLocation)
@@ -1725,10 +1847,6 @@ internal sealed class OverlayForm : Form
     {
         if (disposing)
         {
-            if (_sticker is not null && ImageAnimator.CanAnimate(_sticker))
-            {
-                ImageAnimator.StopAnimate(_sticker, OnFrameChanged);
-            }
             _sticker?.Dispose();
             _stickerStream?.Dispose();
         }
