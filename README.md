@@ -1,6 +1,6 @@
 # Cartoon Cursor Workspace
 
-This repository contains a small native macOS menu bar app prototype and helper scripts used to prepare transparent sticker images.
+This repository contains native Cartoon Cursor app prototypes and helper scripts used to prepare transparent sticker images.
 
 ## App
 
@@ -20,6 +20,19 @@ Palette groups open in a compact editor window so all four colors can be edited 
 Palette editor changes are staged until Apply, so color picker drags do not immediately overwrite saved colors.
 Palette rows use independent Hex/R/G/B inputs, so editing one row only changes that row.
 Palette input updates the preview immediately; Apply saves the staged palette to the effect.
+
+## Windows App
+
+The Windows tray app source lives in `work/CartoonCursorWindows`.
+
+Build it on Windows with the .NET 8 SDK:
+
+```powershell
+cd work\CartoonCursorWindows
+.\scripts\package.ps1
+```
+
+The Windows package script writes generated artifacts to `outputs/windows/`.
 
 ## Sticker Cutout Helpers
 
