@@ -1132,6 +1132,7 @@ internal sealed class OverlayForm : Form
     private float _stickerWalkPhase;
     private float _stickerWalkSpeed;
     private float _stickerWalkTilt;
+    private float _stickerPoseBlend;
 
     public OverlayForm()
     {
@@ -1377,30 +1378,38 @@ internal sealed class OverlayForm : Form
     {
         if (!settings.StickerWalkFollowEnabled && !settings.StickerFrameAnimationEnabled)
         {
+            _stickerPoseBlend = 0;
             return;
         }
 
         float motionIntensity = Math.Min(1f, _stickerWalkSpeed / Math.Max(260f, settings.CursorSize * 5f));
         float phase = _stickerWalkPhase;
         float tilt = _stickerWalkTilt;
-        bool useFramePose = settings.StickerFrameAnimationEnabled;
+        bool combinedFrameAndWalk = settings.StickerFrameAnimationEnabled && settings.StickerWalkFollowEnabled;
+        bool useFramePose = settings.StickerFrameAnimationEnabled && !combinedFrameAndWalk;
         if (settings.StickerFrameAnimationEnabled)
         {
             float seconds = Environment.TickCount64 / 1000f;
             float timePhase = seconds * MathF.PI * 2f * Math.Max(0.2f, (float)settings.StickerWalkSpeedMultiplier * 0.82f);
-            if (settings.StickerWalkFollowEnabled)
+            if (combinedFrameAndWalk)
             {
-                float movementBlend = Math.Clamp(motionIntensity * 1.6f, 0f, 1f);
-                phase = timePhase + _stickerWalkPhase * (0.35f + movementBlend * 0.65f);
-                motionIntensity = Math.Max(motionIntensity, 0.78f);
-                tilt = _stickerWalkTilt * 0.45f + MathF.Sin(timePhase * 0.7f) * 0.12f;
+                float targetBlend = Math.Clamp(motionIntensity * 1.35f, 0f, 1f);
+                _stickerPoseBlend = _stickerPoseBlend * 0.84f + targetBlend * 0.16f;
+                phase = timePhase * (0.90f - _stickerPoseBlend * 0.18f) + _stickerWalkPhase * _stickerPoseBlend * 0.55f;
+                motionIntensity = 0.24f + _stickerPoseBlend * 0.44f;
+                tilt = MathF.Sin(timePhase * 0.7f) * 0.06f + _stickerWalkTilt * _stickerPoseBlend * 0.18f;
             }
             else
             {
+                _stickerPoseBlend = 0;
                 phase = timePhase;
                 motionIntensity = 0.92f;
                 tilt = MathF.Sin(timePhase * 0.7f) * 0.16f;
             }
+        }
+        else
+        {
+            _stickerPoseBlend = 0;
         }
 
         if (motionIntensity < 0.015f)
@@ -1426,15 +1435,20 @@ internal sealed class OverlayForm : Form
             sideStep = sideFrames[frame];
         }
 
-        float bob = -step * settings.CursorSize * 0.085f * motionIntensity * amplitude;
-        float side = sideStep * settings.CursorSize * 0.045f * motionIntensity * amplitude;
-        float squash = 1f + (landing - 0.5f) * 0.070f * motionIntensity * amplitude;
-        float stretch = 1f - (landing - 0.5f) * 0.055f * motionIntensity * amplitude;
+        float bobFactor = combinedFrameAndWalk ? 0.052f : 0.085f;
+        float sideFactor = combinedFrameAndWalk ? 0.020f : 0.045f;
+        float squashFactor = combinedFrameAndWalk ? 0.030f : 0.070f;
+        float stretchFactor = combinedFrameAndWalk ? 0.025f : 0.055f;
+        float rotationFactor = combinedFrameAndWalk ? 10f : 22f;
+        float bob = -step * settings.CursorSize * bobFactor * motionIntensity * amplitude;
+        float side = sideStep * settings.CursorSize * sideFactor * motionIntensity * amplitude;
+        float squash = 1f + (landing - 0.5f) * squashFactor * motionIntensity * amplitude;
+        float stretch = 1f - (landing - 0.5f) * stretchFactor * motionIntensity * amplitude;
         float centerX = rect.Left + rect.Width / 2f;
         float centerY = rect.Top + rect.Height / 2f;
 
         graphics.TranslateTransform(centerX + side, centerY + bob);
-        graphics.RotateTransform(tilt * 22f);
+        graphics.RotateTransform(tilt * rotationFactor);
         graphics.ScaleTransform(squash, stretch);
         graphics.TranslateTransform(-centerX, -centerY);
     }
