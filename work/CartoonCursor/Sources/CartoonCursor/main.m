@@ -4271,7 +4271,7 @@ static BOOL EstimateTravelKilometers(NSString *origin, NSString *destination, CG
     nativeEffectsItem.state = _cursorController.nativeCursorEffectsEnabled ? NSControlStateValueOn : NSControlStateValueOff;
     [menu addItem:nativeEffectsItem];
 
-    NSMenuItem *hideItem = [[NSMenuItem alloc] initWithTitle:@"Try Native Hide Cursor"
+    NSMenuItem *hideItem = [[NSMenuItem alloc] initWithTitle:@"Hide Native Cursor (Best Effort)"
                                                       action:@selector(toggleHideSystemCursor:)
                                                keyEquivalent:@""];
     hideItem.target = self;
