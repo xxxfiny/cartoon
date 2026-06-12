@@ -368,14 +368,14 @@ internal sealed class MouseWalkTripGoalForm : Form
 
         _originBox.Text = settings.MouseWalkOrigin;
         _destinationBox.Text = settings.MouseWalkDestination;
-        _kilometersBox.Text = settings.MouseWalkTargetKilometers > 0
-            ? settings.MouseWalkTargetKilometers.ToString("0.###", CultureInfo.InvariantCulture)
-            : "";
+        _kilometersBox.PlaceholderText = settings.MouseWalkTargetKilometers > 0
+            ? $"Auto, or type km (current {settings.MouseWalkTargetKilometers:0.##})"
+            : "Auto if recognized, or type km";
 
         Label hint = new()
         {
             AutoSize = false,
-            Text = "Tell the cursor where you are and where you want to go. If the city is not recognized, fill an approximate distance.",
+            Text = "Tell the cursor where you are and where you want to go. Leave distance blank to auto-estimate, or type km to override.",
             Bounds = new Rectangle(16, 12, 398, 36)
         };
         Controls.Add(hint);

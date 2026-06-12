@@ -3946,7 +3946,7 @@ static BOOL EstimateTravelKilometers(NSString *origin, NSString *destination, CG
 - (BOOL)showMouseWalkTravelGoalDialog {
     NSAlert *alert = [[NSAlert alloc] init];
     alert.messageText = @"Mouse Walk Trip";
-    alert.informativeText = @"Where are you now, and where do you want the cursor to go?";
+    alert.informativeText = @"Where are you now, and where do you want the cursor to go? Leave distance blank to auto-estimate.";
     [alert addButtonWithTitle:@"OK"];
     [alert addButtonWithTitle:@"Cancel"];
 
@@ -3976,9 +3976,10 @@ static BOOL EstimateTravelKilometers(NSString *origin, NSString *destination, CG
     [accessory addSubview:distanceLabel];
 
     NSTextField *distanceField = [[NSTextField alloc] initWithFrame:NSMakeRect(96, 20, 284, 24)];
-    distanceField.placeholderString = @"Optional if city can be recognized";
     if (_cursorController.mouseWalkTargetKilometers > 0) {
-        distanceField.stringValue = [NSString stringWithFormat:@"%.3f", _cursorController.mouseWalkTargetKilometers];
+        distanceField.placeholderString = [NSString stringWithFormat:@"Auto, or type km (current %.2f)", _cursorController.mouseWalkTargetKilometers];
+    } else {
+        distanceField.placeholderString = @"Auto if recognized, or type km";
     }
     [accessory addSubview:distanceField];
 
