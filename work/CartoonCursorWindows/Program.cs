@@ -64,6 +64,9 @@ internal sealed class AppSettings
     public bool MouseWalkDistanceEnabled { get; set; }
     public double MouseWalkSegmentPixels { get; set; }
     public double MouseWalkTotalPixels { get; set; }
+    public string MouseWalkOrigin { get; set; } = "";
+    public string MouseWalkDestination { get; set; } = "";
+    public double MouseWalkTargetKilometers { get; set; }
     public double StickerWalkSpeedMultiplier { get; set; } = 1.0;
     public double StickerWalkAmplitudeMultiplier { get; set; } = 1.0;
     public int CursorSize { get; set; } = 128;
@@ -240,12 +243,223 @@ internal static class SettingsStore
         settings.StickerWalkAmplitudeMultiplier = Math.Clamp(settings.StickerWalkAmplitudeMultiplier, 0.1, 2.0);
         settings.MouseWalkSegmentPixels = Math.Max(0, settings.MouseWalkSegmentPixels);
         settings.MouseWalkTotalPixels = Math.Max(0, settings.MouseWalkTotalPixels);
+        settings.MouseWalkOrigin = settings.MouseWalkOrigin?.Trim() ?? "";
+        settings.MouseWalkDestination = settings.MouseWalkDestination?.Trim() ?? "";
+        settings.MouseWalkTargetKilometers = Math.Max(0, settings.MouseWalkTargetKilometers);
         settings.CustomTrailColors = ColorPalettes.NormalizeHexes(settings.CustomTrailColors);
         settings.CustomClickColors = ColorPalettes.NormalizeHexes(settings.CustomClickColors);
         settings.CustomParticleColors = ColorPalettes.NormalizeHexes(settings.CustomParticleColors);
         settings.CustomNativeTrailColors = ColorPalettes.NormalizeHexes(settings.CustomNativeTrailColors);
         settings.CustomNativeClickColors = ColorPalettes.NormalizeHexes(settings.CustomNativeClickColors);
         settings.CustomNativeParticleColors = ColorPalettes.NormalizeHexes(settings.CustomNativeParticleColors);
+    }
+}
+
+internal static class MouseWalkTripEstimator
+{
+    private static readonly Dictionary<string, (double Latitude, double Longitude)> Cities = BuildCities();
+
+    public static bool TryEstimateKilometers(string origin, string destination, out double kilometers)
+    {
+        kilometers = 0;
+        if (!TryFindCity(origin, out (double Latitude, double Longitude) start) ||
+            !TryFindCity(destination, out (double Latitude, double Longitude) end))
+        {
+            return false;
+        }
+
+        kilometers = HaversineKilometers(start.Latitude, start.Longitude, end.Latitude, end.Longitude);
+        return kilometers > 0;
+    }
+
+    private static bool TryFindCity(string value, out (double Latitude, double Longitude) coordinate)
+    {
+        return Cities.TryGetValue(Normalize(value), out coordinate);
+    }
+
+    private static Dictionary<string, (double Latitude, double Longitude)> BuildCities()
+    {
+        Dictionary<string, (double Latitude, double Longitude)> cities = new(StringComparer.OrdinalIgnoreCase);
+
+        void Add(double latitude, double longitude, params string[] names)
+        {
+            foreach (string name in names)
+            {
+                cities[Normalize(name)] = (latitude, longitude);
+            }
+        }
+
+        Add(39.9042, 116.4074, "北京", "北京市", "beijing");
+        Add(31.2304, 121.4737, "上海", "上海市", "shanghai");
+        Add(23.1291, 113.2644, "广州", "广州市", "guangzhou");
+        Add(22.5431, 114.0579, "深圳", "深圳市", "shenzhen");
+        Add(30.2741, 120.1551, "杭州", "杭州市", "hangzhou");
+        Add(30.5728, 104.0668, "成都", "成都市", "chengdu");
+        Add(29.4316, 106.9123, "重庆", "重庆市", "chongqing");
+        Add(30.5928, 114.3055, "武汉", "武汉市", "wuhan");
+        Add(32.0603, 118.7969, "南京", "南京市", "nanjing");
+        Add(31.2989, 120.5853, "苏州", "苏州市", "suzhou");
+        Add(34.3416, 108.9398, "西安", "西安市", "xian", "xi'an");
+        Add(28.2282, 112.9388, "长沙", "长沙市", "changsha");
+        Add(24.4798, 118.0894, "厦门", "厦门市", "xiamen");
+        Add(36.0671, 120.3826, "青岛", "青岛市", "qingdao");
+        Add(39.3434, 117.3616, "天津", "天津市", "tianjin");
+        Add(25.0330, 121.5654, "台北", "taipei");
+        Add(22.3193, 114.1694, "香港", "hong kong", "hongkong");
+        Add(22.1987, 113.5439, "澳门", "macau", "macao");
+        Add(35.6762, 139.6503, "东京", "tokyo");
+        Add(37.5665, 126.9780, "首尔", "seoul");
+        Add(1.3521, 103.8198, "新加坡", "singapore");
+        Add(13.7563, 100.5018, "曼谷", "bangkok");
+        Add(48.8566, 2.3522, "巴黎", "paris");
+        Add(51.5072, -0.1276, "伦敦", "london");
+        Add(40.7128, -74.0060, "纽约", "new york", "newyork");
+        Add(34.0522, -118.2437, "洛杉矶", "los angeles", "la");
+        Add(37.7749, -122.4194, "旧金山", "san francisco", "sf");
+        Add(35.6895, 139.6917, "东京市", "tokyo city");
+
+        return cities;
+    }
+
+    private static string Normalize(string value)
+    {
+        return new string((value ?? "")
+            .Trim()
+            .ToLowerInvariant()
+            .Where(ch => !char.IsWhiteSpace(ch) && ch != '\'' && ch != '-' && ch != '_')
+            .ToArray());
+    }
+
+    private static double HaversineKilometers(double lat1, double lon1, double lat2, double lon2)
+    {
+        const double earthRadiusKm = 6371.0;
+        double dLat = DegreesToRadians(lat2 - lat1);
+        double dLon = DegreesToRadians(lon2 - lon1);
+        double startLat = DegreesToRadians(lat1);
+        double endLat = DegreesToRadians(lat2);
+        double a = Math.Sin(dLat / 2) * Math.Sin(dLat / 2) +
+                   Math.Cos(startLat) * Math.Cos(endLat) *
+                   Math.Sin(dLon / 2) * Math.Sin(dLon / 2);
+        return earthRadiusKm * 2 * Math.Atan2(Math.Sqrt(a), Math.Sqrt(1 - a));
+    }
+
+    private static double DegreesToRadians(double degrees) => degrees * Math.PI / 180.0;
+}
+
+internal sealed class MouseWalkTripGoalForm : Form
+{
+    private readonly TextBox _originBox = new();
+    private readonly TextBox _destinationBox = new();
+    private readonly TextBox _kilometersBox = new();
+
+    public string Origin => _originBox.Text.Trim();
+    public string Destination => _destinationBox.Text.Trim();
+    public double TargetKilometers { get; private set; }
+
+    public MouseWalkTripGoalForm(AppSettings settings)
+    {
+        Text = "Mouse Walk Trip";
+        FormBorderStyle = FormBorderStyle.FixedDialog;
+        StartPosition = FormStartPosition.CenterScreen;
+        MinimizeBox = false;
+        MaximizeBox = false;
+        ClientSize = new Size(430, 190);
+        Font = SystemFonts.MessageBoxFont;
+
+        _originBox.Text = settings.MouseWalkOrigin;
+        _destinationBox.Text = settings.MouseWalkDestination;
+        _kilometersBox.Text = settings.MouseWalkTargetKilometers > 0
+            ? settings.MouseWalkTargetKilometers.ToString("0.###", CultureInfo.InvariantCulture)
+            : "";
+
+        Label hint = new()
+        {
+            AutoSize = false,
+            Text = "Tell the cursor where you are and where you want to go. If the city is not recognized, fill an approximate distance.",
+            Bounds = new Rectangle(16, 12, 398, 36)
+        };
+        Controls.Add(hint);
+
+        AddField("From", _originBox, 58);
+        AddField("To", _destinationBox, 92);
+        AddField("Distance km", _kilometersBox, 126);
+
+        Button ok = new()
+        {
+            Text = "OK",
+            DialogResult = DialogResult.OK,
+            Bounds = new Rectangle(254, 156, 76, 26)
+        };
+        Button cancel = new()
+        {
+            Text = "Cancel",
+            DialogResult = DialogResult.Cancel,
+            Bounds = new Rectangle(338, 156, 76, 26)
+        };
+        Controls.Add(ok);
+        Controls.Add(cancel);
+        AcceptButton = ok;
+        CancelButton = cancel;
+    }
+
+    protected override void OnFormClosing(FormClosingEventArgs e)
+    {
+        if (DialogResult != DialogResult.OK)
+        {
+            base.OnFormClosing(e);
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(Origin) || string.IsNullOrWhiteSpace(Destination))
+        {
+            MessageBox.Show(this, "Please fill both places.", "Mouse Walk Trip", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            e.Cancel = true;
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(_kilometersBox.Text))
+        {
+            string distanceText = _kilometersBox.Text.Trim();
+            if (!double.TryParse(distanceText, NumberStyles.Float, CultureInfo.InvariantCulture, out double parsed) &&
+                !double.TryParse(distanceText, NumberStyles.Float, CultureInfo.CurrentCulture, out parsed))
+            {
+                MessageBox.Show(this, "Distance needs to be a number, like 12.5.", "Mouse Walk Trip", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                e.Cancel = true;
+                return;
+            }
+            if (parsed <= 0)
+            {
+                MessageBox.Show(this, "Distance needs to be greater than 0.", "Mouse Walk Trip", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                e.Cancel = true;
+                return;
+            }
+            TargetKilometers = Math.Max(0, parsed);
+        }
+        else if (MouseWalkTripEstimator.TryEstimateKilometers(Origin, Destination, out double estimated))
+        {
+            TargetKilometers = estimated;
+        }
+        else
+        {
+            MessageBox.Show(this, "I do not recognize that route yet. Please fill an approximate distance in km.", "Mouse Walk Trip", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            e.Cancel = true;
+            return;
+        }
+
+        base.OnFormClosing(e);
+    }
+
+    private void AddField(string label, TextBox box, int top)
+    {
+        Label fieldLabel = new()
+        {
+            Text = label,
+            TextAlign = ContentAlignment.MiddleRight,
+            Bounds = new Rectangle(14, top, 92, 24)
+        };
+        box.Bounds = new Rectangle(116, top, 298, 24);
+        Controls.Add(fieldLabel);
+        Controls.Add(box);
     }
 }
 
@@ -391,9 +605,19 @@ internal sealed class CursorAppContext : ApplicationContext
             Enabled = false
         });
         root.DropDownItems.Add(new ToolStripMenuItem("Click commits current segment") { Enabled = false });
+        string goalTitle = _settings.MouseWalkTargetKilometers > 0 &&
+                           !string.IsNullOrWhiteSpace(_settings.MouseWalkOrigin) &&
+                           !string.IsNullOrWhiteSpace(_settings.MouseWalkDestination)
+            ? $"Goal: {_settings.MouseWalkOrigin} -> {_settings.MouseWalkDestination}"
+            : "Goal: Not set";
+        root.DropDownItems.Add(new ToolStripMenuItem(goalTitle) { Enabled = false });
 
         root.DropDownItems.Add(new ToolStripSeparator());
-        root.DropDownItems.Add(new ToolStripMenuItem("Commit Current Segment", null, (_, _) => CommitMouseWalkDistance())
+        root.DropDownItems.Add(new ToolStripMenuItem("Set Travel Goal...", null, (_, _) => { ShowMouseWalkTripGoalDialog(); })
+        {
+            Enabled = _settings.MouseWalkDistanceEnabled
+        });
+        root.DropDownItems.Add(new ToolStripMenuItem("Commit Current Segment", null, (_, _) => { CommitMouseWalkDistance(showTripPopup: true); })
         {
             Enabled = _settings.MouseWalkSegmentPixels >= 1
         });
@@ -513,20 +737,21 @@ internal sealed class CursorAppContext : ApplicationContext
         _settings.MouseWalkSegmentPixels += distance;
     }
 
-    private void CommitMouseWalkDistance(bool rebuildMenu = true)
+    private double CommitMouseWalkDistance(bool rebuildMenu = true, bool showTripPopup = false)
     {
         if (!_settings.MouseWalkDistanceEnabled)
         {
-            return;
+            return 0;
         }
 
         UpdateMouseWalkDistance(Cursor.Position);
         if (_settings.MouseWalkSegmentPixels < 1)
         {
-            return;
+            return 0;
         }
 
-        _settings.MouseWalkTotalPixels += _settings.MouseWalkSegmentPixels;
+        double committedPixels = _settings.MouseWalkSegmentPixels;
+        _settings.MouseWalkTotalPixels += committedPixels;
         _settings.MouseWalkSegmentPixels = 0;
         _hasDistancePoint = false;
         SettingsStore.Save(_settings);
@@ -534,6 +759,51 @@ internal sealed class CursorAppContext : ApplicationContext
         {
             RebuildMenu();
         }
+        if (showTripPopup)
+        {
+            ShowMouseWalkTripSummary(committedPixels);
+        }
+        return committedPixels;
+    }
+
+    private bool ShowMouseWalkTripGoalDialog()
+    {
+        using MouseWalkTripGoalForm form = new(_settings);
+        if (form.ShowDialog() != DialogResult.OK)
+        {
+            return false;
+        }
+
+        _settings.MouseWalkOrigin = form.Origin;
+        _settings.MouseWalkDestination = form.Destination;
+        _settings.MouseWalkTargetKilometers = form.TargetKilometers;
+        SaveAndRefresh();
+        return true;
+    }
+
+    private void ShowMouseWalkTripSummary(double committedPixels)
+    {
+        if (!ShowMouseWalkTripGoalDialog())
+        {
+            return;
+        }
+
+        double committedMeters = PixelsToMeters(committedPixels);
+        double totalMeters = PixelsToMeters(_settings.MouseWalkTotalPixels);
+        double targetMeters = _settings.MouseWalkTargetKilometers * 1000.0;
+        double remainingMeters = Math.Max(0, targetMeters - totalMeters);
+        double percent = targetMeters > 0 ? Math.Min(999, totalMeters / targetMeters * 100.0) : 0;
+
+        string title = remainingMeters <= 0.5 ? "Mouse Walk Trip Complete" : "Mouse Walk Trip";
+        string message =
+            $"From {_settings.MouseWalkOrigin} to {_settings.MouseWalkDestination}: about {_settings.MouseWalkTargetKilometers:0.##} km\n\n" +
+            $"This segment: {FormatMeters(committedMeters)}\n" +
+            $"Total mouse walk: {FormatMeters(totalMeters)}\n" +
+            $"Still to go: {FormatMeters(remainingMeters)}\n" +
+            $"Progress: {percent:0.###}%\n\n" +
+            MouseWalkEncouragement(totalMeters);
+
+        MessageBox.Show(message, title, MessageBoxButtons.OK, MessageBoxIcon.Information);
     }
 
     private static string FormatDistance(double pixels)
@@ -549,6 +819,30 @@ internal sealed class CursorAppContext : ApplicationContext
     {
         double dpi = ScreenDpiX();
         return pixels / dpi * 0.0254;
+    }
+
+    private static string FormatMeters(double meters)
+    {
+        return meters >= 1000
+            ? $"{meters / 1000:0.00} km"
+            : $"{meters:0.00} m";
+    }
+
+    private static string MouseWalkEncouragement(double totalMeters)
+    {
+        if (totalMeters >= 1000)
+        {
+            return "The cursor has already taken a proper little city walk.";
+        }
+        if (totalMeters >= 100)
+        {
+            return "That is roughly a small coffee run, but fully powered by mouse wiggles.";
+        }
+        if (totalMeters >= 10)
+        {
+            return "Tiny steps, very official expedition energy.";
+        }
+        return "The journey has started. The cursor has packed snacks.";
     }
 
     private static double ScreenDpiX()

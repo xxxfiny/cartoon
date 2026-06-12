@@ -11,6 +11,9 @@ static NSString * const DefaultsKeyStickerFrameAnimation = @"stickerFrameAnimati
 static NSString * const DefaultsKeyMouseWalkDistanceEnabled = @"mouseWalkDistanceEnabled";
 static NSString * const DefaultsKeyMouseWalkSegmentPoints = @"mouseWalkSegmentPoints";
 static NSString * const DefaultsKeyMouseWalkTotalPoints = @"mouseWalkTotalPoints";
+static NSString * const DefaultsKeyMouseWalkOrigin = @"mouseWalkOrigin";
+static NSString * const DefaultsKeyMouseWalkDestination = @"mouseWalkDestination";
+static NSString * const DefaultsKeyMouseWalkTargetKilometers = @"mouseWalkTargetKilometers";
 static NSString * const DefaultsKeyStickerWalkSpeed = @"stickerWalkSpeed";
 static NSString * const DefaultsKeyStickerWalkAmplitude = @"stickerWalkAmplitude";
 static NSString * const DefaultsKeyHideSystemCursor = @"hideSystemCursor";
@@ -1395,6 +1398,12 @@ static NSTimeInterval CartoonAnimationDelayFromProperties(NSDictionary *properti
 @property(nonatomic, copy, readonly) NSArray<NSDictionary *> *stickerLibrary;
 @property(nonatomic, copy, readonly) NSString *currentStickerIdentifier;
 @property(nonatomic, assign, readonly) BOOL usingDefaultCartoon;
+@property(nonatomic, assign) BOOL mouseWalkDistanceEnabled;
+@property(nonatomic, assign, readonly) CGFloat mouseWalkSegmentPoints;
+@property(nonatomic, assign, readonly) CGFloat mouseWalkTotalPoints;
+@property(nonatomic, copy, readonly) NSString *mouseWalkOrigin;
+@property(nonatomic, copy, readonly) NSString *mouseWalkDestination;
+@property(nonatomic, assign, readonly) CGFloat mouseWalkTargetKilometers;
 + (NSArray<NSNumber *> *)sizes;
 - (void)start;
 - (void)stop;
@@ -1405,6 +1414,8 @@ static NSTimeInterval CartoonAnimationDelayFromProperties(NSDictionary *properti
 - (NSURL *)stickerLibraryDirectoryURL;
 - (void)useDefaultCartoon;
 - (void)commitMouseWalkDistance;
+- (CGFloat)commitMouseWalkDistanceReturningSegment;
+- (void)setMouseWalkOrigin:(NSString *)origin destination:(NSString *)destination targetKilometers:(CGFloat)targetKilometers;
 - (void)resetMouseWalkSegmentDistance;
 - (void)resetMouseWalkTotalDistance;
 - (void)resetMouseWalkAllDistance;
@@ -1439,6 +1450,9 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     NSPoint _lastMouseWalkPoint;
     CGFloat _mouseWalkSegmentPoints;
     CGFloat _mouseWalkTotalPoints;
+    NSString *_mouseWalkOrigin;
+    NSString *_mouseWalkDestination;
+    CGFloat _mouseWalkTargetKilometers;
     CGFloat _stickerWalkSpeedMultiplier;
     CGFloat _stickerWalkAmplitudeMultiplier;
     BOOL _nativeCursorEffectsEnabled;
@@ -1566,6 +1580,9 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     }
     _mouseWalkSegmentPoints = MAX(0, [defaults doubleForKey:DefaultsKeyMouseWalkSegmentPoints]);
     _mouseWalkTotalPoints = MAX(0, [defaults doubleForKey:DefaultsKeyMouseWalkTotalPoints]);
+    _mouseWalkOrigin = [[defaults stringForKey:DefaultsKeyMouseWalkOrigin] ?: @"" copy];
+    _mouseWalkDestination = [[defaults stringForKey:DefaultsKeyMouseWalkDestination] ?: @"" copy];
+    _mouseWalkTargetKilometers = MAX(0, [defaults doubleForKey:DefaultsKeyMouseWalkTargetKilometers]);
     _hasMouseWalkPoint = NO;
 
     if ([defaults objectForKey:DefaultsKeyStickerWalkSpeed] == nil) {
@@ -1869,10 +1886,34 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     return _mouseWalkTotalPoints;
 }
 
+- (NSString *)mouseWalkOrigin {
+    return _mouseWalkOrigin ?: @"";
+}
+
+- (NSString *)mouseWalkDestination {
+    return _mouseWalkDestination ?: @"";
+}
+
+- (CGFloat)mouseWalkTargetKilometers {
+    return _mouseWalkTargetKilometers;
+}
+
 - (void)saveMouseWalkDistances {
     NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
     [defaults setDouble:_mouseWalkSegmentPoints forKey:DefaultsKeyMouseWalkSegmentPoints];
     [defaults setDouble:_mouseWalkTotalPoints forKey:DefaultsKeyMouseWalkTotalPoints];
+}
+
+- (void)setMouseWalkOrigin:(NSString *)origin destination:(NSString *)destination targetKilometers:(CGFloat)targetKilometers {
+    _mouseWalkOrigin = [[origin stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet] copy] ?: @"";
+    _mouseWalkDestination = [[destination stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet] copy] ?: @"";
+    _mouseWalkTargetKilometers = MAX(0, targetKilometers);
+
+    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+    [defaults setObject:_mouseWalkOrigin forKey:DefaultsKeyMouseWalkOrigin];
+    [defaults setObject:_mouseWalkDestination forKey:DefaultsKeyMouseWalkDestination];
+    [defaults setDouble:_mouseWalkTargetKilometers forKey:DefaultsKeyMouseWalkTargetKilometers];
+    [self notifyMouseWalkDistanceDidChange];
 }
 
 - (void)notifyMouseWalkDistanceDidChange {
@@ -1880,15 +1921,26 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
 }
 
 - (void)commitMouseWalkDistance {
-    if (!_mouseWalkDistanceEnabled || _mouseWalkSegmentPoints < 1.0) {
-        return;
+    [self commitMouseWalkDistanceReturningSegment];
+}
+
+- (CGFloat)commitMouseWalkDistanceReturningSegment {
+    if (!_mouseWalkDistanceEnabled) {
+        return 0;
     }
 
-    _mouseWalkTotalPoints += _mouseWalkSegmentPoints;
+    [self updateMouseWalkDistanceWithGlobalPoint:NSEvent.mouseLocation];
+    if (_mouseWalkSegmentPoints < 1.0) {
+        return 0;
+    }
+
+    CGFloat committedPoints = _mouseWalkSegmentPoints;
+    _mouseWalkTotalPoints += committedPoints;
     _mouseWalkSegmentPoints = 0;
     _hasMouseWalkPoint = NO;
     [self saveMouseWalkDistances];
     [self notifyMouseWalkDistanceDidChange];
+    return committedPoints;
 }
 
 - (void)resetMouseWalkSegmentDistance {
@@ -2757,6 +2809,91 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     return [controller handleEventTapWithType:type event:event];
 }
 
+static NSString *NormalizeTravelPlace(NSString *value) {
+    NSString *trimmed = [[value ?: @"" stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet] lowercaseString];
+    NSMutableString *result = [NSMutableString stringWithCapacity:trimmed.length];
+    NSCharacterSet *skipSet = [NSCharacterSet characterSetWithCharactersInString:@" \t\r\n'-_"];
+    for (NSUInteger index = 0; index < trimmed.length; index++) {
+        unichar character = [trimmed characterAtIndex:index];
+        if ([skipSet characterIsMember:character]) {
+            continue;
+        }
+        [result appendFormat:@"%C", character];
+    }
+    return result;
+}
+
+static NSDictionary<NSString *, NSValue *> *TravelCityCoordinates(void) {
+    static NSDictionary<NSString *, NSValue *> *cities = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        NSMutableDictionary<NSString *, NSValue *> *mutableCities = [NSMutableDictionary dictionary];
+        void (^addCity)(CGFloat, CGFloat, NSArray<NSString *> *) = ^(CGFloat latitude, CGFloat longitude, NSArray<NSString *> *names) {
+            NSValue *value = [NSValue valueWithPoint:NSMakePoint(latitude, longitude)];
+            for (NSString *name in names) {
+                mutableCities[NormalizeTravelPlace(name)] = value;
+            }
+        };
+
+        addCity(39.9042, 116.4074, @[@"北京", @"北京市", @"beijing"]);
+        addCity(31.2304, 121.4737, @[@"上海", @"上海市", @"shanghai"]);
+        addCity(23.1291, 113.2644, @[@"广州", @"广州市", @"guangzhou"]);
+        addCity(22.5431, 114.0579, @[@"深圳", @"深圳市", @"shenzhen"]);
+        addCity(30.2741, 120.1551, @[@"杭州", @"杭州市", @"hangzhou"]);
+        addCity(30.5728, 104.0668, @[@"成都", @"成都市", @"chengdu"]);
+        addCity(29.4316, 106.9123, @[@"重庆", @"重庆市", @"chongqing"]);
+        addCity(30.5928, 114.3055, @[@"武汉", @"武汉市", @"wuhan"]);
+        addCity(32.0603, 118.7969, @[@"南京", @"南京市", @"nanjing"]);
+        addCity(31.2989, 120.5853, @[@"苏州", @"苏州市", @"suzhou"]);
+        addCity(34.3416, 108.9398, @[@"西安", @"西安市", @"xian", @"xi'an"]);
+        addCity(28.2282, 112.9388, @[@"长沙", @"长沙市", @"changsha"]);
+        addCity(24.4798, 118.0894, @[@"厦门", @"厦门市", @"xiamen"]);
+        addCity(36.0671, 120.3826, @[@"青岛", @"青岛市", @"qingdao"]);
+        addCity(39.3434, 117.3616, @[@"天津", @"天津市", @"tianjin"]);
+        addCity(25.0330, 121.5654, @[@"台北", @"taipei"]);
+        addCity(22.3193, 114.1694, @[@"香港", @"hong kong", @"hongkong"]);
+        addCity(22.1987, 113.5439, @[@"澳门", @"macau", @"macao"]);
+        addCity(35.6762, 139.6503, @[@"东京", @"东京市", @"tokyo", @"tokyo city"]);
+        addCity(37.5665, 126.9780, @[@"首尔", @"seoul"]);
+        addCity(1.3521, 103.8198, @[@"新加坡", @"singapore"]);
+        addCity(13.7563, 100.5018, @[@"曼谷", @"bangkok"]);
+        addCity(48.8566, 2.3522, @[@"巴黎", @"paris"]);
+        addCity(51.5072, -0.1276, @[@"伦敦", @"london"]);
+        addCity(40.7128, -74.0060, @[@"纽约", @"new york", @"newyork"]);
+        addCity(34.0522, -118.2437, @[@"洛杉矶", @"los angeles", @"la"]);
+        addCity(37.7749, -122.4194, @[@"旧金山", @"san francisco", @"sf"]);
+
+        cities = [mutableCities copy];
+    });
+    return cities;
+}
+
+static CGFloat DegreesToRadians(CGFloat degrees) {
+    return degrees * (CGFloat)M_PI / 180.0;
+}
+
+static BOOL EstimateTravelKilometers(NSString *origin, NSString *destination, CGFloat *kilometers) {
+    NSValue *originValue = TravelCityCoordinates()[NormalizeTravelPlace(origin)];
+    NSValue *destinationValue = TravelCityCoordinates()[NormalizeTravelPlace(destination)];
+    if (!originValue || !destinationValue) {
+        return NO;
+    }
+
+    NSPoint start = originValue.pointValue;
+    NSPoint end = destinationValue.pointValue;
+    CGFloat dLat = DegreesToRadians(end.x - start.x);
+    CGFloat dLon = DegreesToRadians(end.y - start.y);
+    CGFloat startLat = DegreesToRadians(start.x);
+    CGFloat endLat = DegreesToRadians(end.x);
+    CGFloat a = sin(dLat / 2.0) * sin(dLat / 2.0) +
+                cos(startLat) * cos(endLat) * sin(dLon / 2.0) * sin(dLon / 2.0);
+    CGFloat result = 6371.0 * 2.0 * atan2(sqrt(a), sqrt(1.0 - a));
+    if (kilometers) {
+        *kilometers = result;
+    }
+    return result > 0;
+}
+
 @interface AppDelegate : NSObject <NSApplicationDelegate, NSTextFieldDelegate>
 @end
 
@@ -3434,6 +3571,133 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     return [NSString stringWithFormat:@"%.0f pt / %@", points, walkText];
 }
 
+- (CGFloat)metersForMouseWalkPoints:(CGFloat)points {
+    return points / 96.0 * 0.0254;
+}
+
+- (NSString *)titleForMouseWalkMeters:(CGFloat)meters {
+    return meters >= 1000.0 ?
+        [NSString stringWithFormat:@"%.2f km", meters / 1000.0] :
+        [NSString stringWithFormat:@"%.2f m", meters];
+}
+
+- (NSString *)mouseWalkEncouragementForTotalMeters:(CGFloat)totalMeters {
+    if (totalMeters >= 1000.0) {
+        return @"The cursor has already taken a proper little city walk.";
+    }
+    if (totalMeters >= 100.0) {
+        return @"That is roughly a small coffee run, but fully powered by mouse wiggles.";
+    }
+    if (totalMeters >= 10.0) {
+        return @"Tiny steps, very official expedition energy.";
+    }
+    return @"The journey has started. The cursor has packed snacks.";
+}
+
+- (void)showMouseWalkMessage:(NSString *)message informativeText:(NSString *)informativeText {
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.messageText = message;
+    alert.informativeText = informativeText;
+    [alert addButtonWithTitle:@"OK"];
+    [alert runModal];
+}
+
+- (BOOL)showMouseWalkTravelGoalDialog {
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.messageText = @"Mouse Walk Trip";
+    alert.informativeText = @"Where are you now, and where do you want the cursor to go?";
+    [alert addButtonWithTitle:@"OK"];
+    [alert addButtonWithTitle:@"Cancel"];
+
+    NSView *accessory = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 390, 122)];
+
+    NSTextField *originLabel = [NSTextField labelWithString:@"Now"];
+    originLabel.frame = NSMakeRect(0, 92, 86, 22);
+    originLabel.alignment = NSTextAlignmentRight;
+    [accessory addSubview:originLabel];
+
+    NSTextField *originField = [[NSTextField alloc] initWithFrame:NSMakeRect(96, 92, 284, 24)];
+    originField.stringValue = _cursorController.mouseWalkOrigin ?: @"";
+    [accessory addSubview:originField];
+
+    NSTextField *destinationLabel = [NSTextField labelWithString:@"Want to go"];
+    destinationLabel.frame = NSMakeRect(0, 56, 86, 22);
+    destinationLabel.alignment = NSTextAlignmentRight;
+    [accessory addSubview:destinationLabel];
+
+    NSTextField *destinationField = [[NSTextField alloc] initWithFrame:NSMakeRect(96, 56, 284, 24)];
+    destinationField.stringValue = _cursorController.mouseWalkDestination ?: @"";
+    [accessory addSubview:destinationField];
+
+    NSTextField *distanceLabel = [NSTextField labelWithString:@"Distance km"];
+    distanceLabel.frame = NSMakeRect(0, 20, 86, 22);
+    distanceLabel.alignment = NSTextAlignmentRight;
+    [accessory addSubview:distanceLabel];
+
+    NSTextField *distanceField = [[NSTextField alloc] initWithFrame:NSMakeRect(96, 20, 284, 24)];
+    distanceField.placeholderString = @"Optional if city can be recognized";
+    if (_cursorController.mouseWalkTargetKilometers > 0) {
+        distanceField.stringValue = [NSString stringWithFormat:@"%.3f", _cursorController.mouseWalkTargetKilometers];
+    }
+    [accessory addSubview:distanceField];
+
+    alert.accessoryView = accessory;
+    NSModalResponse response = [alert runModal];
+    if (response != NSAlertFirstButtonReturn) {
+        return NO;
+    }
+
+    NSString *origin = [originField.stringValue stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    NSString *destination = [destinationField.stringValue stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if (origin.length == 0 || destination.length == 0) {
+        [self showMouseWalkMessage:@"Mouse Walk Trip" informativeText:@"Please fill both places."];
+        return NO;
+    }
+
+    NSString *distanceText = [distanceField.stringValue stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    CGFloat targetKilometers = 0;
+    if (distanceText.length > 0) {
+        NSScanner *scanner = [NSScanner scannerWithString:distanceText];
+        double parsed = 0;
+        if (![scanner scanDouble:&parsed] || !scanner.isAtEnd || parsed <= 0) {
+            [self showMouseWalkMessage:@"Mouse Walk Trip" informativeText:@"Distance needs to be a positive number, like 12.5."];
+            return NO;
+        }
+        targetKilometers = (CGFloat)parsed;
+    } else if (!EstimateTravelKilometers(origin, destination, &targetKilometers)) {
+        [self showMouseWalkMessage:@"Mouse Walk Trip" informativeText:@"I do not recognize that route yet. Please fill an approximate distance in km."];
+        return NO;
+    }
+
+    [_cursorController setMouseWalkOrigin:origin destination:destination targetKilometers:targetKilometers];
+    return YES;
+}
+
+- (void)showMouseWalkTravelSummaryForCommittedPoints:(CGFloat)committedPoints {
+    if (![self showMouseWalkTravelGoalDialog]) {
+        return;
+    }
+
+    CGFloat committedMeters = [self metersForMouseWalkPoints:committedPoints];
+    CGFloat totalMeters = [self metersForMouseWalkPoints:_cursorController.mouseWalkTotalPoints];
+    CGFloat targetMeters = _cursorController.mouseWalkTargetKilometers * 1000.0;
+    CGFloat remainingMeters = MAX(0, targetMeters - totalMeters);
+    CGFloat progress = targetMeters > 0 ? MIN(999.0, totalMeters / targetMeters * 100.0) : 0;
+
+    NSString *message = remainingMeters <= 0.5 ? @"Mouse Walk Trip Complete" : @"Mouse Walk Trip";
+    NSString *informative = [NSString stringWithFormat:
+                             @"From %@ to %@: about %.2f km\n\nThis segment: %@\nTotal mouse walk: %@\nStill to go: %@\nProgress: %.3f%%\n\n%@",
+                             _cursorController.mouseWalkOrigin,
+                             _cursorController.mouseWalkDestination,
+                             _cursorController.mouseWalkTargetKilometers,
+                             [self titleForMouseWalkMeters:committedMeters],
+                             [self titleForMouseWalkMeters:totalMeters],
+                             [self titleForMouseWalkMeters:remainingMeters],
+                             progress,
+                             [self mouseWalkEncouragementForTotalMeters:totalMeters]];
+    [self showMouseWalkMessage:message informativeText:informative];
+}
+
 - (NSMenu *)mouseWalkDistanceMenu {
     NSMenu *submenu = [[NSMenu alloc] init];
 
@@ -3466,7 +3730,25 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     hintItem.enabled = NO;
     [submenu addItem:hintItem];
 
+    NSString *goalTitle = (_cursorController.mouseWalkTargetKilometers > 0 &&
+                           _cursorController.mouseWalkOrigin.length > 0 &&
+                           _cursorController.mouseWalkDestination.length > 0) ?
+        [NSString stringWithFormat:@"Goal: %@ -> %@", _cursorController.mouseWalkOrigin, _cursorController.mouseWalkDestination] :
+        @"Goal: Not set";
+    NSMenuItem *goalItem = [[NSMenuItem alloc] initWithTitle:goalTitle
+                                                      action:nil
+                                               keyEquivalent:@""];
+    goalItem.enabled = NO;
+    [submenu addItem:goalItem];
+
     [submenu addItem:NSMenuItem.separatorItem];
+
+    NSMenuItem *setGoalItem = [[NSMenuItem alloc] initWithTitle:@"Set Travel Goal..."
+                                                         action:@selector(setMouseWalkTravelGoal:)
+                                                  keyEquivalent:@""];
+    setGoalItem.target = self;
+    setGoalItem.enabled = _cursorController.mouseWalkDistanceEnabled;
+    [submenu addItem:setGoalItem];
 
     NSMenuItem *commitItem = [[NSMenuItem alloc] initWithTitle:@"Commit Current Segment"
                                                         action:@selector(commitMouseWalkDistance:)
@@ -3768,9 +4050,17 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     [self rebuildMenu];
 }
 
-- (void)commitMouseWalkDistance:(NSMenuItem *)sender {
-    [_cursorController commitMouseWalkDistance];
+- (void)setMouseWalkTravelGoal:(NSMenuItem *)sender {
+    [self showMouseWalkTravelGoalDialog];
     [self rebuildMenu];
+}
+
+- (void)commitMouseWalkDistance:(NSMenuItem *)sender {
+    CGFloat committedPoints = [_cursorController commitMouseWalkDistanceReturningSegment];
+    [self rebuildMenu];
+    if (committedPoints >= 1.0) {
+        [self showMouseWalkTravelSummaryForCommittedPoints:committedPoints];
+    }
 }
 
 - (void)resetMouseWalkSegmentDistance:(NSMenuItem *)sender {
