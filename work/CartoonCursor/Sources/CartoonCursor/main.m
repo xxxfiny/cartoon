@@ -3082,7 +3082,7 @@ static BOOL EstimateTravelKilometers(NSString *origin, NSString *destination, CG
                      fromRect:NSZeroRect
                     operation:NSCompositingOperationSourceOver
                      fraction:1.0
-               respectFlipped:NO
+               respectFlipped:YES
                         hints:nil];
     [NSGraphicsContext restoreGraphicsState];
 }
