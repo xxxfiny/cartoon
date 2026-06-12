@@ -61,6 +61,9 @@ internal sealed class AppSettings
     public bool NativeCursorEffectsEnabled { get; set; }
     public bool StickerWalkFollowEnabled { get; set; }
     public bool StickerFrameAnimationEnabled { get; set; }
+    public bool MouseWalkDistanceEnabled { get; set; }
+    public double MouseWalkSegmentPixels { get; set; }
+    public double MouseWalkTotalPixels { get; set; }
     public double StickerWalkSpeedMultiplier { get; set; } = 1.0;
     public double StickerWalkAmplitudeMultiplier { get; set; } = 1.0;
     public int CursorSize { get; set; } = 128;
@@ -235,6 +238,8 @@ internal static class SettingsStore
         settings.CursorSize = Math.Clamp(settings.CursorSize, 24, 320);
         settings.StickerWalkSpeedMultiplier = Math.Clamp(settings.StickerWalkSpeedMultiplier, 0.2, 3.0);
         settings.StickerWalkAmplitudeMultiplier = Math.Clamp(settings.StickerWalkAmplitudeMultiplier, 0.1, 2.0);
+        settings.MouseWalkSegmentPixels = Math.Max(0, settings.MouseWalkSegmentPixels);
+        settings.MouseWalkTotalPixels = Math.Max(0, settings.MouseWalkTotalPixels);
         settings.CustomTrailColors = ColorPalettes.NormalizeHexes(settings.CustomTrailColors);
         settings.CustomClickColors = ColorPalettes.NormalizeHexes(settings.CustomClickColors);
         settings.CustomParticleColors = ColorPalettes.NormalizeHexes(settings.CustomParticleColors);
@@ -252,6 +257,8 @@ internal sealed class CursorAppContext : ApplicationContext
     private readonly System.Windows.Forms.Timer _timer;
     private readonly MouseHook _mouseHook;
     private bool _nativeCursorHidden;
+    private bool _hasDistancePoint;
+    private Point _lastDistancePoint;
 
     public CursorAppContext()
     {
@@ -273,7 +280,7 @@ internal sealed class CursorAppContext : ApplicationContext
         RebuildMenu();
 
         _mouseHook = new MouseHook();
-        _mouseHook.Clicked += (_, _) => _overlay.AddPulse(Cursor.Position);
+        _mouseHook.Clicked += (_, _) => HandleMouseClick();
         _mouseHook.Start();
 
         _timer = new System.Windows.Forms.Timer { Interval = 16 };
@@ -285,7 +292,9 @@ internal sealed class CursorAppContext : ApplicationContext
 
     private void Tick()
     {
-        _overlay.Render(_settings, Cursor.Position);
+        Point cursor = Cursor.Position;
+        UpdateMouseWalkDistance(cursor);
+        _overlay.Render(_settings, cursor);
     }
 
     private void RebuildMenu()
@@ -343,6 +352,7 @@ internal sealed class CursorAppContext : ApplicationContext
 
         menu.Items.Add(new ToolStripSeparator());
 
+        menu.Items.Add(BuildMouseWalkDistanceMenu());
         menu.Items.Add(BuildStickerManagerMenu());
         menu.Items.Add(BuildSizeMenu());
         menu.Items.Add(BuildEffectMenu());
@@ -353,6 +363,65 @@ internal sealed class CursorAppContext : ApplicationContext
 
         _notifyIcon.ContextMenuStrip = menu;
         oldMenu?.Dispose();
+    }
+
+    private ToolStripMenuItem BuildMouseWalkDistanceMenu()
+    {
+        ToolStripMenuItem root = new("Mouse Walk Distance");
+        root.DropDownItems.Add(new ToolStripMenuItem("Enabled", null, (_, _) =>
+        {
+            _settings.MouseWalkDistanceEnabled = !_settings.MouseWalkDistanceEnabled;
+            if (!_settings.MouseWalkDistanceEnabled)
+            {
+                _hasDistancePoint = false;
+            }
+            SaveAndRefresh();
+        })
+        {
+            Checked = _settings.MouseWalkDistanceEnabled
+        });
+
+        root.DropDownItems.Add(new ToolStripSeparator());
+        root.DropDownItems.Add(new ToolStripMenuItem("Current Segment: " + FormatDistance(_settings.MouseWalkSegmentPixels))
+        {
+            Enabled = false
+        });
+        root.DropDownItems.Add(new ToolStripMenuItem("Total Walk: " + FormatDistance(_settings.MouseWalkTotalPixels))
+        {
+            Enabled = false
+        });
+        root.DropDownItems.Add(new ToolStripMenuItem("Click commits current segment") { Enabled = false });
+
+        root.DropDownItems.Add(new ToolStripSeparator());
+        root.DropDownItems.Add(new ToolStripMenuItem("Commit Current Segment", null, (_, _) => CommitMouseWalkDistance())
+        {
+            Enabled = _settings.MouseWalkSegmentPixels >= 1
+        });
+        root.DropDownItems.Add(new ToolStripMenuItem("Reset Current Segment", null, (_, _) =>
+        {
+            _settings.MouseWalkSegmentPixels = 0;
+            _hasDistancePoint = false;
+            SaveAndRefresh();
+        })
+        {
+            Enabled = _settings.MouseWalkSegmentPixels >= 1
+        });
+        root.DropDownItems.Add(new ToolStripMenuItem("Reset Total", null, (_, _) =>
+        {
+            _settings.MouseWalkTotalPixels = 0;
+            SaveAndRefresh();
+        })
+        {
+            Enabled = _settings.MouseWalkTotalPixels >= 1
+        });
+        root.DropDownItems.Add(new ToolStripMenuItem("Reset All", null, (_, _) =>
+        {
+            _settings.MouseWalkSegmentPixels = 0;
+            _settings.MouseWalkTotalPixels = 0;
+            _hasDistancePoint = false;
+            SaveAndRefresh();
+        }));
+        return root;
     }
 
     private ToolStripMenuItem BuildStickerWalkSpeedMenu()
@@ -400,6 +469,99 @@ internal sealed class CursorAppContext : ApplicationContext
             });
         }
         return root;
+    }
+
+    private void HandleMouseClick()
+    {
+        Point cursor = Cursor.Position;
+        _overlay.AddPulse(cursor);
+        CommitMouseWalkDistance();
+    }
+
+    private void UpdateMouseWalkDistance(Point cursor)
+    {
+        if (!_settings.MouseWalkDistanceEnabled)
+        {
+            _hasDistancePoint = false;
+            return;
+        }
+
+        if (!_hasDistancePoint)
+        {
+            _lastDistancePoint = cursor;
+            _hasDistancePoint = true;
+            return;
+        }
+
+        double dx = cursor.X - _lastDistancePoint.X;
+        double dy = cursor.Y - _lastDistancePoint.Y;
+        double distance = Math.Sqrt(dx * dx + dy * dy);
+        _lastDistancePoint = cursor;
+
+        if (distance < 2)
+        {
+            return;
+        }
+
+        Rectangle bounds = SystemInformation.VirtualScreen;
+        double maxReasonableJump = Math.Max(bounds.Width, bounds.Height) * 0.75;
+        if (distance > maxReasonableJump)
+        {
+            return;
+        }
+
+        _settings.MouseWalkSegmentPixels += distance;
+    }
+
+    private void CommitMouseWalkDistance(bool rebuildMenu = true)
+    {
+        if (!_settings.MouseWalkDistanceEnabled)
+        {
+            return;
+        }
+
+        UpdateMouseWalkDistance(Cursor.Position);
+        if (_settings.MouseWalkSegmentPixels < 1)
+        {
+            return;
+        }
+
+        _settings.MouseWalkTotalPixels += _settings.MouseWalkSegmentPixels;
+        _settings.MouseWalkSegmentPixels = 0;
+        _hasDistancePoint = false;
+        SettingsStore.Save(_settings);
+        if (rebuildMenu)
+        {
+            RebuildMenu();
+        }
+    }
+
+    private static string FormatDistance(double pixels)
+    {
+        double meters = PixelsToMeters(pixels);
+        string walkText = meters >= 1000
+            ? $"{meters / 1000:0.00} km"
+            : $"{meters:0.00} m";
+        return $"{pixels:0} px / {walkText}";
+    }
+
+    private static double PixelsToMeters(double pixels)
+    {
+        double dpi = ScreenDpiX();
+        return pixels / dpi * 0.0254;
+    }
+
+    private static double ScreenDpiX()
+    {
+        try
+        {
+            using Graphics graphics = Graphics.FromHwnd(IntPtr.Zero);
+            return graphics.DpiX > 1 ? graphics.DpiX : 96.0;
+        }
+        catch
+        {
+            return 96.0;
+        }
     }
 
     private ToolStripMenuItem BuildEffectColorsMenu()

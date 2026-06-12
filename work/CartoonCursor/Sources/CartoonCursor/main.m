@@ -8,6 +8,9 @@
 static NSString * const DefaultsKeyEnabled = @"enabled";
 static NSString * const DefaultsKeyStickerWalkFollow = @"stickerWalkFollow";
 static NSString * const DefaultsKeyStickerFrameAnimation = @"stickerFrameAnimation";
+static NSString * const DefaultsKeyMouseWalkDistanceEnabled = @"mouseWalkDistanceEnabled";
+static NSString * const DefaultsKeyMouseWalkSegmentPoints = @"mouseWalkSegmentPoints";
+static NSString * const DefaultsKeyMouseWalkTotalPoints = @"mouseWalkTotalPoints";
 static NSString * const DefaultsKeyStickerWalkSpeed = @"stickerWalkSpeed";
 static NSString * const DefaultsKeyStickerWalkAmplitude = @"stickerWalkAmplitude";
 static NSString * const DefaultsKeyHideSystemCursor = @"hideSystemCursor";
@@ -27,6 +30,7 @@ static NSString * const DefaultsKeyCustomNativeTrailColors = @"customNativeTrail
 static NSString * const DefaultsKeyCustomNativeClickColors = @"customNativeClickColors";
 static NSString * const DefaultsKeyCustomNativeParticleColors = @"customNativeParticleColors";
 static NSString * const DefaultsKeyBehaviorVersion = @"behaviorVersion";
+static NSString * const MouseWalkDistanceDidChangeNotification = @"MouseWalkDistanceDidChangeNotification";
 static const NSInteger CurrentBehaviorVersion = 6;
 static const NSTimeInterval CursorSuppressionInterval = 0.05;
 static const CGFloat DefaultCoverCursorSize = 160.0;
@@ -211,6 +215,9 @@ static NSTimeInterval CartoonAnimationDelayFromProperties(NSDictionary *properti
 @property(nonatomic, assign) BOOL stickerVisible;
 @property(nonatomic, assign) BOOL stickerWalkFollowEnabled;
 @property(nonatomic, assign) BOOL stickerFrameAnimationEnabled;
+@property(nonatomic, assign) BOOL mouseWalkDistanceEnabled;
+@property(nonatomic, assign, readonly) CGFloat mouseWalkSegmentPoints;
+@property(nonatomic, assign, readonly) CGFloat mouseWalkTotalPoints;
 @property(nonatomic, assign) CGFloat stickerWalkSpeedMultiplier;
 @property(nonatomic, assign) CGFloat stickerWalkAmplitudeMultiplier;
 @property(nonatomic, assign) CursorEffectStyle effectStyle;
@@ -1397,6 +1404,10 @@ static NSTimeInterval CartoonAnimationDelayFromProperties(NSDictionary *properti
 - (void)removeStickerWithIdentifier:(NSString *)identifier;
 - (NSURL *)stickerLibraryDirectoryURL;
 - (void)useDefaultCartoon;
+- (void)commitMouseWalkDistance;
+- (void)resetMouseWalkSegmentDistance;
+- (void)resetMouseWalkTotalDistance;
+- (void)resetMouseWalkAllDistance;
 - (CGEventRef)handleEventTapWithType:(CGEventType)type event:(CGEventRef)event;
 @end
 
@@ -1423,6 +1434,11 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     BOOL _mouseCursorAssociated;
     BOOL _stickerWalkFollowEnabled;
     BOOL _stickerFrameAnimationEnabled;
+    BOOL _mouseWalkDistanceEnabled;
+    BOOL _hasMouseWalkPoint;
+    NSPoint _lastMouseWalkPoint;
+    CGFloat _mouseWalkSegmentPoints;
+    CGFloat _mouseWalkTotalPoints;
     CGFloat _stickerWalkSpeedMultiplier;
     CGFloat _stickerWalkAmplitudeMultiplier;
     BOOL _nativeCursorEffectsEnabled;
@@ -1541,6 +1557,16 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     } else {
         _stickerFrameAnimationEnabled = [defaults boolForKey:DefaultsKeyStickerFrameAnimation];
     }
+
+    if ([defaults objectForKey:DefaultsKeyMouseWalkDistanceEnabled] == nil) {
+        _mouseWalkDistanceEnabled = NO;
+        [defaults setBool:NO forKey:DefaultsKeyMouseWalkDistanceEnabled];
+    } else {
+        _mouseWalkDistanceEnabled = [defaults boolForKey:DefaultsKeyMouseWalkDistanceEnabled];
+    }
+    _mouseWalkSegmentPoints = MAX(0, [defaults doubleForKey:DefaultsKeyMouseWalkSegmentPoints]);
+    _mouseWalkTotalPoints = MAX(0, [defaults doubleForKey:DefaultsKeyMouseWalkTotalPoints]);
+    _hasMouseWalkPoint = NO;
 
     if ([defaults objectForKey:DefaultsKeyStickerWalkSpeed] == nil) {
         _stickerWalkSpeedMultiplier = DefaultStickerWalkSpeed;
@@ -1822,6 +1848,70 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     }
 }
 
+- (BOOL)mouseWalkDistanceEnabled {
+    return _mouseWalkDistanceEnabled;
+}
+
+- (void)setMouseWalkDistanceEnabled:(BOOL)mouseWalkDistanceEnabled {
+    _mouseWalkDistanceEnabled = mouseWalkDistanceEnabled;
+    if (!mouseWalkDistanceEnabled) {
+        _hasMouseWalkPoint = NO;
+    }
+    [NSUserDefaults.standardUserDefaults setBool:mouseWalkDistanceEnabled forKey:DefaultsKeyMouseWalkDistanceEnabled];
+    [self applyEnabledState];
+}
+
+- (CGFloat)mouseWalkSegmentPoints {
+    return _mouseWalkSegmentPoints;
+}
+
+- (CGFloat)mouseWalkTotalPoints {
+    return _mouseWalkTotalPoints;
+}
+
+- (void)saveMouseWalkDistances {
+    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+    [defaults setDouble:_mouseWalkSegmentPoints forKey:DefaultsKeyMouseWalkSegmentPoints];
+    [defaults setDouble:_mouseWalkTotalPoints forKey:DefaultsKeyMouseWalkTotalPoints];
+}
+
+- (void)notifyMouseWalkDistanceDidChange {
+    [NSNotificationCenter.defaultCenter postNotificationName:MouseWalkDistanceDidChangeNotification object:self];
+}
+
+- (void)commitMouseWalkDistance {
+    if (!_mouseWalkDistanceEnabled || _mouseWalkSegmentPoints < 1.0) {
+        return;
+    }
+
+    _mouseWalkTotalPoints += _mouseWalkSegmentPoints;
+    _mouseWalkSegmentPoints = 0;
+    _hasMouseWalkPoint = NO;
+    [self saveMouseWalkDistances];
+    [self notifyMouseWalkDistanceDidChange];
+}
+
+- (void)resetMouseWalkSegmentDistance {
+    _mouseWalkSegmentPoints = 0;
+    _hasMouseWalkPoint = NO;
+    [self saveMouseWalkDistances];
+    [self notifyMouseWalkDistanceDidChange];
+}
+
+- (void)resetMouseWalkTotalDistance {
+    _mouseWalkTotalPoints = 0;
+    [self saveMouseWalkDistances];
+    [self notifyMouseWalkDistanceDidChange];
+}
+
+- (void)resetMouseWalkAllDistance {
+    _mouseWalkSegmentPoints = 0;
+    _mouseWalkTotalPoints = 0;
+    _hasMouseWalkPoint = NO;
+    [self saveMouseWalkDistances];
+    [self notifyMouseWalkDistanceDidChange];
+}
+
 - (CGFloat)stickerWalkSpeedMultiplier {
     return _stickerWalkSpeedMultiplier;
 }
@@ -2024,6 +2114,7 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
 }
 
 - (void)stop {
+    [self saveMouseWalkDistances];
     [self stopVirtualCursorIfNeeded];
     [self stopTimer];
     [self removeClickMonitors];
@@ -2226,7 +2317,7 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
 }
 
 - (BOOL)shouldRunOverlay {
-    return self.isEnabled || self.nativeCursorEffectsEnabled;
+    return self.isEnabled || self.nativeCursorEffectsEnabled || self.mouseWalkDistanceEnabled;
 }
 
 - (void)startTimer {
@@ -2254,6 +2345,8 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     }
 
     NSPoint globalPoint = [self currentCursorAppKitPoint];
+    [self updateMouseWalkDistanceWithGlobalPoint:globalPoint];
+
     NSPoint localPoint = NSZeroPoint;
     CursorView *activeView = [self viewForGlobalPoint:globalPoint localPoint:&localPoint];
 
@@ -2268,6 +2361,38 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     }
 
     [self reinforceCursorVisibilityState];
+}
+
+- (void)updateMouseWalkDistanceWithGlobalPoint:(NSPoint)globalPoint {
+    if (!_mouseWalkDistanceEnabled) {
+        _hasMouseWalkPoint = NO;
+        return;
+    }
+
+    if (!_hasMouseWalkPoint) {
+        _lastMouseWalkPoint = globalPoint;
+        _hasMouseWalkPoint = YES;
+        return;
+    }
+
+    CGFloat dx = globalPoint.x - _lastMouseWalkPoint.x;
+    CGFloat dy = globalPoint.y - _lastMouseWalkPoint.y;
+    CGFloat distance = hypot(dx, dy);
+    _lastMouseWalkPoint = globalPoint;
+
+    if (distance < 2.0) {
+        return;
+    }
+
+    CGFloat maxReasonableJump = 6000.0;
+    for (NSScreen *screen in NSScreen.screens) {
+        maxReasonableJump = MAX(maxReasonableJump, MAX(NSWidth(screen.frame), NSHeight(screen.frame)) * 0.75);
+    }
+    if (distance > maxReasonableJump) {
+        return;
+    }
+
+    _mouseWalkSegmentPoints += distance;
 }
 
 - (void)startClickMonitors {
@@ -2302,6 +2427,9 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     }
 
     NSPoint globalPoint = [self currentCursorAppKitPoint];
+    [self updateMouseWalkDistanceWithGlobalPoint:globalPoint];
+    [self commitMouseWalkDistance];
+
     NSPoint localPoint = NSZeroPoint;
     CursorView *activeView = [self viewForGlobalPoint:globalPoint localPoint:&localPoint];
     [activeView addPulseAtPoint:localPoint];
@@ -2646,6 +2774,7 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     NSArray<NSArray<NSButton *> *> *_palettePresetButtons;
     NSArray<NSColor *> *_paletteDraftColors;
     BOOL _updatingPaletteControls;
+    id _mouseWalkDistanceObserver;
 }
 
 - (instancetype)init {
@@ -2662,11 +2791,22 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
 
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
     [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
+    __weak typeof(self) weakSelf = self;
+    _mouseWalkDistanceObserver = [NSNotificationCenter.defaultCenter addObserverForName:MouseWalkDistanceDidChangeNotification
+                                                                                 object:_cursorController
+                                                                                  queue:NSOperationQueue.mainQueue
+                                                                             usingBlock:^(__unused NSNotification *note) {
+        [weakSelf rebuildMenu];
+    }];
     [self setupStatusItem];
     [_cursorController start];
 }
 
 - (void)applicationWillTerminate:(NSNotification *)notification {
+    if (_mouseWalkDistanceObserver) {
+        [NSNotificationCenter.defaultCenter removeObserver:_mouseWalkDistanceObserver];
+        _mouseWalkDistanceObserver = nil;
+    }
     [_cursorController stop];
 }
 
@@ -3286,6 +3426,78 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     return image;
 }
 
+- (NSString *)titleForMouseWalkDistance:(CGFloat)points {
+    CGFloat meters = points / 96.0 * 0.0254;
+    NSString *walkText = meters >= 1000.0 ?
+        [NSString stringWithFormat:@"%.2f km", meters / 1000.0] :
+        [NSString stringWithFormat:@"%.2f m", meters];
+    return [NSString stringWithFormat:@"%.0f pt / %@", points, walkText];
+}
+
+- (NSMenu *)mouseWalkDistanceMenu {
+    NSMenu *submenu = [[NSMenu alloc] init];
+
+    NSMenuItem *enabledItem = [[NSMenuItem alloc] initWithTitle:@"Enabled"
+                                                         action:@selector(toggleMouseWalkDistance:)
+                                                  keyEquivalent:@""];
+    enabledItem.target = self;
+    enabledItem.state = _cursorController.mouseWalkDistanceEnabled ? NSControlStateValueOn : NSControlStateValueOff;
+    [submenu addItem:enabledItem];
+
+    [submenu addItem:NSMenuItem.separatorItem];
+
+    NSMenuItem *segmentItem = [[NSMenuItem alloc] initWithTitle:[NSString stringWithFormat:@"Current Segment: %@",
+                                                                 [self titleForMouseWalkDistance:_cursorController.mouseWalkSegmentPoints]]
+                                                         action:nil
+                                                  keyEquivalent:@""];
+    segmentItem.enabled = NO;
+    [submenu addItem:segmentItem];
+
+    NSMenuItem *totalItem = [[NSMenuItem alloc] initWithTitle:[NSString stringWithFormat:@"Total Walk: %@",
+                                                               [self titleForMouseWalkDistance:_cursorController.mouseWalkTotalPoints]]
+                                                       action:nil
+                                                keyEquivalent:@""];
+    totalItem.enabled = NO;
+    [submenu addItem:totalItem];
+
+    NSMenuItem *hintItem = [[NSMenuItem alloc] initWithTitle:@"Click commits current segment"
+                                                      action:nil
+                                               keyEquivalent:@""];
+    hintItem.enabled = NO;
+    [submenu addItem:hintItem];
+
+    [submenu addItem:NSMenuItem.separatorItem];
+
+    NSMenuItem *commitItem = [[NSMenuItem alloc] initWithTitle:@"Commit Current Segment"
+                                                        action:@selector(commitMouseWalkDistance:)
+                                                 keyEquivalent:@""];
+    commitItem.target = self;
+    commitItem.enabled = _cursorController.mouseWalkSegmentPoints >= 1.0;
+    [submenu addItem:commitItem];
+
+    NSMenuItem *resetSegmentItem = [[NSMenuItem alloc] initWithTitle:@"Reset Current Segment"
+                                                              action:@selector(resetMouseWalkSegmentDistance:)
+                                                       keyEquivalent:@""];
+    resetSegmentItem.target = self;
+    resetSegmentItem.enabled = _cursorController.mouseWalkSegmentPoints >= 1.0;
+    [submenu addItem:resetSegmentItem];
+
+    NSMenuItem *resetTotalItem = [[NSMenuItem alloc] initWithTitle:@"Reset Total"
+                                                            action:@selector(resetMouseWalkTotalDistance:)
+                                                     keyEquivalent:@""];
+    resetTotalItem.target = self;
+    resetTotalItem.enabled = _cursorController.mouseWalkTotalPoints >= 1.0;
+    [submenu addItem:resetTotalItem];
+
+    NSMenuItem *resetAllItem = [[NSMenuItem alloc] initWithTitle:@"Reset All"
+                                                          action:@selector(resetMouseWalkAllDistance:)
+                                                   keyEquivalent:@""];
+    resetAllItem.target = self;
+    [submenu addItem:resetAllItem];
+
+    return submenu;
+}
+
 - (NSMenu *)stickerManagerMenu {
     NSMenu *submenu = [[NSMenu alloc] init];
 
@@ -3450,6 +3662,12 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
 
     [menu addItem:NSMenuItem.separatorItem];
 
+    NSMenuItem *mouseWalkDistanceItem = [[NSMenuItem alloc] initWithTitle:@"Mouse Walk Distance"
+                                                                   action:nil
+                                                            keyEquivalent:@""];
+    mouseWalkDistanceItem.submenu = [self mouseWalkDistanceMenu];
+    [menu addItem:mouseWalkDistanceItem];
+
     NSMenuItem *stickerManagerItem = [[NSMenuItem alloc] initWithTitle:@"Sticker Manager"
                                                                 action:nil
                                                          keyEquivalent:@""];
@@ -3542,6 +3760,31 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
 
 - (void)toggleStickerFrameAnimation:(NSMenuItem *)sender {
     _cursorController.stickerFrameAnimationEnabled = !_cursorController.stickerFrameAnimationEnabled;
+    [self rebuildMenu];
+}
+
+- (void)toggleMouseWalkDistance:(NSMenuItem *)sender {
+    _cursorController.mouseWalkDistanceEnabled = !_cursorController.mouseWalkDistanceEnabled;
+    [self rebuildMenu];
+}
+
+- (void)commitMouseWalkDistance:(NSMenuItem *)sender {
+    [_cursorController commitMouseWalkDistance];
+    [self rebuildMenu];
+}
+
+- (void)resetMouseWalkSegmentDistance:(NSMenuItem *)sender {
+    [_cursorController resetMouseWalkSegmentDistance];
+    [self rebuildMenu];
+}
+
+- (void)resetMouseWalkTotalDistance:(NSMenuItem *)sender {
+    [_cursorController resetMouseWalkTotalDistance];
+    [self rebuildMenu];
+}
+
+- (void)resetMouseWalkAllDistance:(NSMenuItem *)sender {
+    [_cursorController resetMouseWalkAllDistance];
     [self rebuildMenu];
 }
 
