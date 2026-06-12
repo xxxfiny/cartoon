@@ -463,6 +463,269 @@ internal sealed class MouseWalkTripGoalForm : Form
     }
 }
 
+internal sealed class MouseWalkTripSummaryForm : Form
+{
+    private readonly Image? _sticker;
+    private readonly Color[] _palette;
+    private readonly string _origin;
+    private readonly string _destination;
+    private readonly string _target;
+    private readonly string _segment;
+    private readonly string _total;
+    private readonly string _remaining;
+    private readonly string _progressText;
+    private readonly string _encouragement;
+    private readonly double _progress;
+    private readonly bool _complete;
+
+    public MouseWalkTripSummaryForm(
+        AppSettings settings,
+        Image? sticker,
+        Color[] palette,
+        double committedMeters,
+        double totalMeters,
+        double remainingMeters,
+        double progress,
+        string encouragement)
+    {
+        _sticker = sticker;
+        _palette = NormalizePalette(palette);
+        _origin = settings.MouseWalkOrigin;
+        _destination = settings.MouseWalkDestination;
+        _target = $"{settings.MouseWalkTargetKilometers:0.##} km";
+        _segment = FormatMeters(committedMeters);
+        _total = FormatMeters(totalMeters);
+        _remaining = FormatMeters(remainingMeters);
+        _progress = Math.Clamp(progress / 100.0, 0, 1);
+        _progressText = $"{progress:0.###}%";
+        _encouragement = encouragement;
+        _complete = remainingMeters <= 0.5;
+
+        Text = "Mouse Walk Trip";
+        StartPosition = FormStartPosition.CenterScreen;
+        FormBorderStyle = FormBorderStyle.FixedDialog;
+        MinimizeBox = false;
+        MaximizeBox = false;
+        ClientSize = new Size(510, 360);
+        BackColor = Blend(Color.White, _palette[0], 0.08);
+        DoubleBuffered = true;
+        Font = SystemFonts.MessageBoxFont;
+
+        Button ok = new()
+        {
+            Text = _complete ? "Yay!" : "Keep Walking",
+            Bounds = new Rectangle(345, 312, 126, 32),
+            BackColor = ReadableAccent(_palette[0]),
+            ForeColor = Color.White,
+            FlatStyle = FlatStyle.Flat
+        };
+        ok.FlatAppearance.BorderSize = 0;
+        ok.Click += (_, _) => Close();
+        Controls.Add(ok);
+        AcceptButton = ok;
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        base.OnPaint(e);
+        Graphics graphics = e.Graphics;
+        graphics.SmoothingMode = SmoothingMode.AntiAlias;
+        graphics.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+
+        Rectangle card = new(20, 18, ClientSize.Width - 40, 284);
+        using (SolidBrush background = new(Blend(Color.White, _palette[1], 0.18)))
+        {
+            graphics.FillRectangle(background, ClientRectangle);
+        }
+
+        DrawDecorations(graphics);
+
+        using GraphicsPath cardPath = RoundedRect(card, 24);
+        using SolidBrush cardBrush = new(Color.FromArgb(242, Color.White));
+        using Pen cardPen = new(Color.FromArgb(110, ReadableAccent(_palette[0])), 1.4f);
+        graphics.FillPath(cardBrush, cardPath);
+        graphics.DrawPath(cardPen, cardPath);
+
+        DrawSticker(graphics, new Rectangle(38, 74, 132, 132));
+        DrawHeader(graphics);
+        DrawProgress(graphics, new Rectangle(196, 154, 244, 14));
+        DrawMetrics(graphics);
+        DrawEncouragement(graphics);
+    }
+
+    private void DrawHeader(Graphics graphics)
+    {
+        using Font titleFont = new(Font.FontFamily, 20, FontStyle.Bold);
+        using Font routeFont = new(Font.FontFamily, 9, FontStyle.Regular);
+        using SolidBrush titleBrush = new(Color.FromArgb(35, 35, 40));
+        using SolidBrush routeBrush = new(Color.FromArgb(112, 90, 105));
+
+        graphics.DrawString(_complete ? "Trip complete!" : "Tiny trip checkpoint", titleFont, titleBrush, new PointF(194, 54));
+        graphics.DrawString($"{_origin}  ->  {_destination}  about {_target}", routeFont, routeBrush, new RectangleF(196, 88, 266, 38));
+    }
+
+    private void DrawMetrics(Graphics graphics)
+    {
+        DrawMetric(graphics, new Rectangle(196, 184, 116, 48), "This segment", _segment, _palette[0]);
+        DrawMetric(graphics, new Rectangle(324, 184, 116, 48), "Total", _total, _palette[2]);
+        DrawMetric(graphics, new Rectangle(196, 242, 116, 48), "Still to go", _remaining, _palette[3]);
+        DrawMetric(graphics, new Rectangle(324, 242, 116, 48), "Progress", _progressText, _palette[1]);
+    }
+
+    private void DrawMetric(Graphics graphics, Rectangle rect, string label, string value, Color accent)
+    {
+        using GraphicsPath path = RoundedRect(rect, 14);
+        using SolidBrush fill = new(Color.FromArgb(232, Blend(Color.White, accent, 0.16)));
+        using Pen border = new(Color.FromArgb(78, accent), 1);
+        graphics.FillPath(fill, path);
+        graphics.DrawPath(border, path);
+
+        using Font labelFont = new(Font.FontFamily, 8, FontStyle.Regular);
+        using Font valueFont = new(Font.FontFamily, 11, FontStyle.Bold);
+        using SolidBrush labelBrush = new(Color.FromArgb(112, 92, 105));
+        using SolidBrush valueBrush = new(Color.FromArgb(39, 35, 40));
+        graphics.DrawString(label, labelFont, labelBrush, new RectangleF(rect.X + 12, rect.Y + 8, rect.Width - 24, 14));
+        graphics.DrawString(value, valueFont, valueBrush, new RectangleF(rect.X + 12, rect.Y + 23, rect.Width - 24, 18));
+    }
+
+    private void DrawEncouragement(Graphics graphics)
+    {
+        using Font font = new(Font.FontFamily, 9, FontStyle.Regular);
+        using SolidBrush brush = new(Color.FromArgb(90, 73, 84));
+        graphics.DrawString(_encouragement, font, brush, new RectangleF(42, 236, 126, 48));
+    }
+
+    private void DrawProgress(Graphics graphics, Rectangle rect)
+    {
+        using GraphicsPath bg = RoundedRect(rect, rect.Height / 2);
+        using SolidBrush bgBrush = new(Color.FromArgb(48, _palette[0]));
+        graphics.FillPath(bgBrush, bg);
+
+        Rectangle fillRect = new(rect.X, rect.Y, Math.Max(rect.Height, (int)Math.Round(rect.Width * _progress)), rect.Height);
+        using GraphicsPath fill = RoundedRect(fillRect, rect.Height / 2);
+        using LinearGradientBrush brush = new(fillRect, ReadableAccent(_palette[0]), ReadableAccent(_palette[2]), LinearGradientMode.Horizontal);
+        graphics.FillPath(brush, fill);
+    }
+
+    private void DrawSticker(Graphics graphics, Rectangle rect)
+    {
+        Rectangle bubble = new(rect.X - 10, rect.Y - 10, rect.Width + 20, rect.Height + 20);
+        using GraphicsPath bubblePath = RoundedRect(bubble, 34);
+        using SolidBrush bubbleBrush = new(Color.FromArgb(220, Blend(Color.White, _palette[0], 0.24)));
+        graphics.FillPath(bubbleBrush, bubblePath);
+
+        if (_sticker is null)
+        {
+            using Font font = new(Font.FontFamily, 42, FontStyle.Bold);
+            using SolidBrush brush = new(ReadableAccent(_palette[0]));
+            using StringFormat format = new()
+            {
+                Alignment = StringAlignment.Center,
+                LineAlignment = StringAlignment.Center
+            };
+            graphics.DrawString("OK", font, brush, new RectangleF(rect.X, rect.Y, rect.Width, rect.Height), format);
+            return;
+        }
+
+        SizeF fitted = FitSize(_sticker.Size, rect.Size);
+        RectangleF drawRect = new(
+            rect.X + (rect.Width - fitted.Width) / 2,
+            rect.Y + (rect.Height - fitted.Height) / 2,
+            fitted.Width,
+            fitted.Height);
+
+        using GraphicsPath shadowPath = RoundedRect(Rectangle.Round(drawRect), 18);
+        using SolidBrush shadow = new(Color.FromArgb(45, Color.Black));
+        using Matrix matrix = new();
+        matrix.Translate(0, 4);
+        shadowPath.Transform(matrix);
+        graphics.FillPath(shadow, shadowPath);
+        graphics.DrawImage(_sticker, drawRect);
+    }
+
+    private void DrawDecorations(Graphics graphics)
+    {
+        using SolidBrush blobA = new(Color.FromArgb(74, _palette[0]));
+        using SolidBrush blobB = new(Color.FromArgb(54, _palette[2]));
+        graphics.FillEllipse(blobA, -28, 24, 150, 150);
+        graphics.FillEllipse(blobB, 390, 0, 160, 160);
+
+        DrawStar(graphics, 448, 64, 9, _palette[1]);
+        DrawStar(graphics, 70, 54, 7, _palette[2]);
+        DrawStar(graphics, 154, 252, 8, _palette[3]);
+        DrawStar(graphics, 456, 246, 6, _palette[0]);
+    }
+
+    private static void DrawStar(Graphics graphics, float centerX, float centerY, float radius, Color color)
+    {
+        PointF[] points = new PointF[8];
+        for (int i = 0; i < points.Length; i++)
+        {
+            float angle = i * MathF.PI / 4f - MathF.PI / 2f;
+            float distance = i % 2 == 0 ? radius : radius * 0.42f;
+            points[i] = new PointF(centerX + MathF.Cos(angle) * distance, centerY + MathF.Sin(angle) * distance);
+        }
+
+        using SolidBrush brush = new(Color.FromArgb(215, color));
+        graphics.FillPolygon(brush, points);
+    }
+
+    private static GraphicsPath RoundedRect(Rectangle rect, int radius)
+    {
+        GraphicsPath path = new();
+        int diameter = radius * 2;
+        path.AddArc(rect.X, rect.Y, diameter, diameter, 180, 90);
+        path.AddArc(rect.Right - diameter, rect.Y, diameter, diameter, 270, 90);
+        path.AddArc(rect.Right - diameter, rect.Bottom - diameter, diameter, diameter, 0, 90);
+        path.AddArc(rect.X, rect.Bottom - diameter, diameter, diameter, 90, 90);
+        path.CloseFigure();
+        return path;
+    }
+
+    private static SizeF FitSize(Size imageSize, Size bounds)
+    {
+        if (imageSize.Width <= 0 || imageSize.Height <= 0)
+        {
+            return bounds;
+        }
+
+        float scale = Math.Min(bounds.Width / (float)imageSize.Width, bounds.Height / (float)imageSize.Height);
+        return new SizeF(imageSize.Width * scale, imageSize.Height * scale);
+    }
+
+    private static Color[] NormalizePalette(Color[]? palette)
+    {
+        Color[] fallback = ColorPalettes.DefaultColors();
+        Color[] normalized = (palette ?? Array.Empty<Color>())
+            .Where(color => color.A > 0)
+            .Concat(fallback)
+            .Take(4)
+            .ToArray();
+        return normalized.Length >= 4 ? normalized : fallback;
+    }
+
+    private static Color ReadableAccent(Color color)
+    {
+        return color.GetBrightness() > 0.70f ? Blend(color, Color.Black, 0.28) : color;
+    }
+
+    private static Color Blend(Color a, Color b, double amount)
+    {
+        amount = Math.Clamp(amount, 0, 1);
+        int r = (int)Math.Round(a.R + (b.R - a.R) * amount);
+        int g = (int)Math.Round(a.G + (b.G - a.G) * amount);
+        int bl = (int)Math.Round(a.B + (b.B - a.B) * amount);
+        return Color.FromArgb(255, r, g, bl);
+    }
+
+    private static string FormatMeters(double meters)
+    {
+        return meters >= 1000
+            ? $"{meters / 1000:0.00} km"
+            : $"{meters:0.00} m";
+    }
+}
+
 internal sealed class CursorAppContext : ApplicationContext
 {
     private readonly AppSettings _settings;
@@ -794,16 +1057,24 @@ internal sealed class CursorAppContext : ApplicationContext
         double remainingMeters = Math.Max(0, targetMeters - totalMeters);
         double percent = targetMeters > 0 ? Math.Min(999, totalMeters / targetMeters * 100.0) : 0;
 
-        string title = remainingMeters <= 0.5 ? "Mouse Walk Trip Complete" : "Mouse Walk Trip";
-        string message =
-            $"From {_settings.MouseWalkOrigin} to {_settings.MouseWalkDestination}: about {_settings.MouseWalkTargetKilometers:0.##} km\n\n" +
-            $"This segment: {FormatMeters(committedMeters)}\n" +
-            $"Total mouse walk: {FormatMeters(totalMeters)}\n" +
-            $"Still to go: {FormatMeters(remainingMeters)}\n" +
-            $"Progress: {percent:0.###}%\n\n" +
-            MouseWalkEncouragement(totalMeters);
-
-        MessageBox.Show(message, title, MessageBoxButtons.OK, MessageBoxIcon.Information);
+        Image? stickerPreview = _overlay.CreateStickerPreview();
+        try
+        {
+            using MouseWalkTripSummaryForm form = new(
+                _settings,
+                stickerPreview,
+                _overlay.CurrentStickerColors(),
+                committedMeters,
+                totalMeters,
+                remainingMeters,
+                percent,
+                MouseWalkEncouragement(totalMeters));
+            form.ShowDialog();
+        }
+        finally
+        {
+            stickerPreview?.Dispose();
+        }
     }
 
     private static string FormatDistance(double pixels)
@@ -1626,6 +1897,28 @@ internal sealed class OverlayForm : Form
         _hasStickerDrawPoint = false;
         _hasStickerTrailPoint = false;
         _stickerTrailPoints.Clear();
+    }
+
+    public Color[] CurrentStickerColors()
+    {
+        return _autoStickerColors.ToArray();
+    }
+
+    public Image? CreateStickerPreview()
+    {
+        if (_sticker is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            return new Bitmap(_sticker);
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     public void AddPulse(Point screenPoint)

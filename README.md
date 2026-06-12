@@ -20,7 +20,7 @@ Palette groups open in a compact editor window so all four colors can be edited 
 Palette editor changes are staged until Apply, so color picker drags do not immediately overwrite saved colors.
 Palette rows use independent Hex/R/G/B inputs, so editing one row only changes that row.
 Palette input updates the preview immediately; Apply saves the staged palette to the effect.
-The Mouse Walk Distance menu can track the current mouse travel segment and commit it into a total distance on click. Manual commits ask for a small travel goal and show the estimated remaining distance.
+The Mouse Walk Distance menu can track the current mouse travel segment and commit it into a total distance on click. Manual commits ask for a small travel goal and show a sticker-themed trip summary with the estimated remaining distance.
 
 ## Windows App
 

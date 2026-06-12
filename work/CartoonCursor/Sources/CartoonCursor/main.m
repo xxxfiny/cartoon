@@ -1413,6 +1413,8 @@ static NSTimeInterval CartoonAnimationDelayFromProperties(NSDictionary *properti
 - (void)removeStickerWithIdentifier:(NSString *)identifier;
 - (NSURL *)stickerLibraryDirectoryURL;
 - (void)useDefaultCartoon;
+- (NSImage *)currentStickerPreviewImage;
+- (NSArray<NSColor *> *)currentStickerPreviewColors;
 - (void)commitMouseWalkDistance;
 - (CGFloat)commitMouseWalkDistanceReturningSegment;
 - (void)setMouseWalkOrigin:(NSString *)origin destination:(NSString *)destination targetKilometers:(CGFloat)targetKilometers;
@@ -2301,6 +2303,18 @@ static CGEventRef CartoonCursorEventTapCallback(CGEventTapProxy proxy,
     }
 }
 
+- (NSImage *)currentStickerPreviewImage {
+    return _customAnimationFrames.firstObject ?: _customImage;
+}
+
+- (NSArray<NSColor *> *)currentStickerPreviewColors {
+    NSImage *image = [self currentStickerPreviewImage];
+    if (!image) {
+        return [CursorView defaultEffectColors];
+    }
+    return [CursorView effectColorsForImage:image];
+}
+
 - (void)rebuildOverlay {
     BOOL wasVisible = [self shouldRunOverlay];
 
@@ -2894,6 +2908,280 @@ static BOOL EstimateTravelKilometers(NSString *origin, NSString *destination, CG
     return result > 0;
 }
 
+@interface MouseWalkSummaryView : NSView
+- (instancetype)initWithFrame:(NSRect)frame
+                 stickerImage:(NSImage *)stickerImage
+                       colors:(NSArray<NSColor *> *)colors
+                       origin:(NSString *)origin
+                  destination:(NSString *)destination
+                       target:(NSString *)target
+                      segment:(NSString *)segment
+                        total:(NSString *)total
+                    remaining:(NSString *)remaining
+                     progress:(CGFloat)progress
+                 progressText:(NSString *)progressText
+                encouragement:(NSString *)encouragement
+                     complete:(BOOL)complete;
+@end
+
+@implementation MouseWalkSummaryView {
+    NSImage *_stickerImage;
+    NSArray<NSColor *> *_colors;
+    NSString *_origin;
+    NSString *_destination;
+    NSString *_target;
+    NSString *_segment;
+    NSString *_total;
+    NSString *_remaining;
+    NSString *_progressText;
+    NSString *_encouragement;
+    CGFloat _progress;
+    BOOL _complete;
+}
+
+- (instancetype)initWithFrame:(NSRect)frame
+                 stickerImage:(NSImage *)stickerImage
+                       colors:(NSArray<NSColor *> *)colors
+                       origin:(NSString *)origin
+                  destination:(NSString *)destination
+                       target:(NSString *)target
+                      segment:(NSString *)segment
+                        total:(NSString *)total
+                    remaining:(NSString *)remaining
+                     progress:(CGFloat)progress
+                 progressText:(NSString *)progressText
+                encouragement:(NSString *)encouragement
+                     complete:(BOOL)complete {
+    self = [super initWithFrame:frame];
+    if (!self) {
+        return nil;
+    }
+
+    _stickerImage = stickerImage;
+    _colors = [CursorView normalizedEffectColors:colors ?: @[]];
+    _origin = [origin copy] ?: @"";
+    _destination = [destination copy] ?: @"";
+    _target = [target copy] ?: @"";
+    _segment = [segment copy] ?: @"";
+    _total = [total copy] ?: @"";
+    _remaining = [remaining copy] ?: @"";
+    _progressText = [progressText copy] ?: @"";
+    _encouragement = [encouragement copy] ?: @"";
+    _progress = MAX(0.0, MIN(1.0, progress));
+    _complete = complete;
+    self.wantsLayer = YES;
+    return self;
+}
+
+- (BOOL)isFlipped {
+    return YES;
+}
+
+- (void)drawRect:(NSRect)dirtyRect {
+    [super drawRect:dirtyRect];
+
+    NSColor *baseColor = [self blendColor:NSColor.whiteColor withColor:_colors[1] amount:0.16];
+    [baseColor setFill];
+    NSRectFill(self.bounds);
+
+    [self drawDecorations];
+
+    NSRect card = NSMakeRect(18, 14, NSWidth(self.bounds) - 36, 278);
+    NSBezierPath *cardPath = [NSBezierPath bezierPathWithRoundedRect:card xRadius:24 yRadius:24];
+    [[NSColor.whiteColor colorWithAlphaComponent:0.94] setFill];
+    [cardPath fill];
+    [[_colors[0] colorWithAlphaComponent:0.38] setStroke];
+    cardPath.lineWidth = 1.3;
+    [cardPath stroke];
+
+    [self drawStickerInRect:NSMakeRect(36, 70, 132, 132)];
+    [self drawHeader];
+    [self drawProgressInRect:NSMakeRect(196, 150, 244, 14)];
+    [self drawMetricWithLabel:@"This segment" value:_segment color:_colors[0] rect:NSMakeRect(196, 180, 116, 48)];
+    [self drawMetricWithLabel:@"Total" value:_total color:_colors[2] rect:NSMakeRect(324, 180, 116, 48)];
+    [self drawMetricWithLabel:@"Still to go" value:_remaining color:_colors[3] rect:NSMakeRect(196, 238, 116, 48)];
+    [self drawMetricWithLabel:@"Progress" value:_progressText color:_colors[1] rect:NSMakeRect(324, 238, 116, 48)];
+    [self drawText:_encouragement
+            inRect:NSMakeRect(42, 230, 126, 50)
+              font:[NSFont systemFontOfSize:12 weight:NSFontWeightRegular]
+             color:[NSColor colorWithCalibratedWhite:0.28 alpha:1.0]
+         alignment:NSTextAlignmentLeft];
+}
+
+- (void)drawHeader {
+    [self drawText:(_complete ? @"Trip complete!" : @"Tiny trip checkpoint")
+            inRect:NSMakeRect(194, 48, 280, 28)
+              font:[NSFont systemFontOfSize:22 weight:NSFontWeightBold]
+             color:[NSColor colorWithCalibratedWhite:0.12 alpha:1.0]
+         alignment:NSTextAlignmentLeft];
+
+    NSString *route = [NSString stringWithFormat:@"%@  ->  %@  about %@", _origin, _destination, _target];
+    [self drawText:route
+            inRect:NSMakeRect(196, 84, 266, 38)
+              font:[NSFont systemFontOfSize:11 weight:NSFontWeightRegular]
+             color:[NSColor colorWithCalibratedWhite:0.42 alpha:1.0]
+         alignment:NSTextAlignmentLeft];
+}
+
+- (void)drawProgressInRect:(NSRect)rect {
+    NSBezierPath *track = [NSBezierPath bezierPathWithRoundedRect:rect xRadius:NSHeight(rect) / 2.0 yRadius:NSHeight(rect) / 2.0];
+    [[_colors[0] colorWithAlphaComponent:0.20] setFill];
+    [track fill];
+
+    NSRect fillRect = rect;
+    fillRect.size.width = MAX(NSHeight(rect), NSWidth(rect) * _progress);
+    NSBezierPath *fill = [NSBezierPath bezierPathWithRoundedRect:fillRect xRadius:NSHeight(rect) / 2.0 yRadius:NSHeight(rect) / 2.0];
+    [[self readableAccentForColor:_colors[0]] setFill];
+    [fill fill];
+}
+
+- (void)drawMetricWithLabel:(NSString *)label value:(NSString *)value color:(NSColor *)color rect:(NSRect)rect {
+    NSBezierPath *path = [NSBezierPath bezierPathWithRoundedRect:rect xRadius:14 yRadius:14];
+    [[self blendColor:NSColor.whiteColor withColor:color amount:0.14] setFill];
+    [path fill];
+    [[color colorWithAlphaComponent:0.34] setStroke];
+    path.lineWidth = 1.0;
+    [path stroke];
+
+    [self drawText:label
+            inRect:NSMakeRect(NSMinX(rect) + 12, NSMinY(rect) + 8, NSWidth(rect) - 24, 14)
+              font:[NSFont systemFontOfSize:10 weight:NSFontWeightRegular]
+             color:[NSColor colorWithCalibratedWhite:0.45 alpha:1.0]
+         alignment:NSTextAlignmentLeft];
+    [self drawText:value
+            inRect:NSMakeRect(NSMinX(rect) + 12, NSMinY(rect) + 23, NSWidth(rect) - 24, 18)
+              font:[NSFont systemFontOfSize:13 weight:NSFontWeightBold]
+             color:[NSColor colorWithCalibratedWhite:0.12 alpha:1.0]
+         alignment:NSTextAlignmentLeft];
+}
+
+- (void)drawStickerInRect:(NSRect)rect {
+    NSRect bubble = NSInsetRect(rect, -10, -10);
+    NSBezierPath *bubblePath = [NSBezierPath bezierPathWithRoundedRect:bubble xRadius:34 yRadius:34];
+    [[[self blendColor:NSColor.whiteColor withColor:_colors[0] amount:0.24] colorWithAlphaComponent:0.92] setFill];
+    [bubblePath fill];
+
+    if (!_stickerImage) {
+        [self drawText:@"OK"
+                inRect:rect
+                  font:[NSFont systemFontOfSize:42 weight:NSFontWeightBold]
+                 color:[self readableAccentForColor:_colors[0]]
+             alignment:NSTextAlignmentCenter];
+        return;
+    }
+
+    NSRect drawRect = [self fittedRectForImage:_stickerImage inRect:rect];
+    NSShadow *shadow = [[NSShadow alloc] init];
+    shadow.shadowBlurRadius = 10;
+    shadow.shadowOffset = NSMakeSize(0, -4);
+    shadow.shadowColor = [NSColor.blackColor colorWithAlphaComponent:0.22];
+
+    [NSGraphicsContext saveGraphicsState];
+    [shadow set];
+    [_stickerImage drawInRect:drawRect
+                     fromRect:NSZeroRect
+                    operation:NSCompositingOperationSourceOver
+                     fraction:1.0
+               respectFlipped:NO
+                        hints:nil];
+    [NSGraphicsContext restoreGraphicsState];
+}
+
+- (void)drawDecorations {
+    [[_colors[0] colorWithAlphaComponent:0.23] setFill];
+    [[NSBezierPath bezierPathWithOvalInRect:NSMakeRect(-28, 24, 150, 150)] fill];
+    [[_colors[2] colorWithAlphaComponent:0.17] setFill];
+    [[NSBezierPath bezierPathWithOvalInRect:NSMakeRect(386, -10, 170, 170)] fill];
+
+    [self drawStarAt:NSMakePoint(446, 58) radius:9 color:_colors[1]];
+    [self drawStarAt:NSMakePoint(70, 50) radius:7 color:_colors[2]];
+    [self drawStarAt:NSMakePoint(154, 248) radius:8 color:_colors[3]];
+    [self drawStarAt:NSMakePoint(456, 238) radius:6 color:_colors[0]];
+}
+
+- (void)drawStarAt:(NSPoint)center radius:(CGFloat)radius color:(NSColor *)color {
+    NSBezierPath *star = [NSBezierPath bezierPath];
+    for (NSInteger index = 0; index < 8; index++) {
+        CGFloat angle = index * (CGFloat)M_PI / 4.0 - (CGFloat)M_PI / 2.0;
+        CGFloat distance = index % 2 == 0 ? radius : radius * 0.42;
+        NSPoint point = NSMakePoint(center.x + cos(angle) * distance,
+                                    center.y + sin(angle) * distance);
+        if (index == 0) {
+            [star moveToPoint:point];
+        } else {
+            [star lineToPoint:point];
+        }
+    }
+    [star closePath];
+    [[color colorWithAlphaComponent:0.84] setFill];
+    [star fill];
+}
+
+- (NSRect)fittedRectForImage:(NSImage *)image inRect:(NSRect)rect {
+    CGFloat imageWidth = image.size.width;
+    CGFloat imageHeight = image.size.height;
+    if (image.representations.count > 0) {
+        NSImageRep *rep = image.representations.firstObject;
+        if (rep.pixelsWide > 0 && rep.pixelsHigh > 0) {
+            imageWidth = rep.pixelsWide;
+            imageHeight = rep.pixelsHigh;
+        }
+    }
+
+    if (imageWidth <= 0 || imageHeight <= 0) {
+        return rect;
+    }
+
+    CGFloat scale = MIN(NSWidth(rect) / imageWidth, NSHeight(rect) / imageHeight);
+    NSSize size = NSMakeSize(imageWidth * scale, imageHeight * scale);
+    return NSMakeRect(NSMidX(rect) - size.width / 2.0,
+                      NSMidY(rect) - size.height / 2.0,
+                      size.width,
+                      size.height);
+}
+
+- (void)drawText:(NSString *)text
+          inRect:(NSRect)rect
+            font:(NSFont *)font
+           color:(NSColor *)color
+       alignment:(NSTextAlignment)alignment {
+    NSMutableParagraphStyle *paragraph = [[NSMutableParagraphStyle alloc] init];
+    paragraph.alignment = alignment;
+    paragraph.lineBreakMode = NSLineBreakByWordWrapping;
+    NSDictionary *attributes = @{
+        NSFontAttributeName: font,
+        NSForegroundColorAttributeName: color,
+        NSParagraphStyleAttributeName: paragraph
+    };
+    [text drawInRect:rect withAttributes:attributes];
+}
+
+- (NSColor *)blendColor:(NSColor *)a withColor:(NSColor *)b amount:(CGFloat)amount {
+    amount = MAX(0.0, MIN(1.0, amount));
+    NSColor *left = CartoonColorUsingSRGB(a);
+    NSColor *right = CartoonColorUsingSRGB(b);
+    CGFloat lr = 0, lg = 0, lb = 0, la = 0;
+    CGFloat rr = 0, rg = 0, rb = 0, ra = 0;
+    [left getRed:&lr green:&lg blue:&lb alpha:&la];
+    [right getRed:&rr green:&rg blue:&rb alpha:&ra];
+    return [NSColor colorWithCalibratedRed:lr + (rr - lr) * amount
+                                     green:lg + (rg - lg) * amount
+                                      blue:lb + (rb - lb) * amount
+                                     alpha:1.0];
+}
+
+- (NSColor *)readableAccentForColor:(NSColor *)color {
+    NSColor *rgbColor = CartoonColorUsingSRGB(color);
+    CGFloat hue = 0, saturation = 0, brightness = 0, alpha = 0;
+    [rgbColor getHue:&hue saturation:&saturation brightness:&brightness alpha:&alpha];
+    if (brightness > 0.70) {
+        return [NSColor colorWithCalibratedHue:hue saturation:MIN(1.0, saturation + 0.12) brightness:0.58 alpha:1.0];
+    }
+    return rgbColor;
+}
+
+@end
+
 @interface AppDelegate : NSObject <NSApplicationDelegate, NSTextFieldDelegate>
 @end
 
@@ -2912,6 +3200,7 @@ static BOOL EstimateTravelKilometers(NSString *origin, NSString *destination, CG
     NSArray<NSColor *> *_paletteDraftColors;
     BOOL _updatingPaletteControls;
     id _mouseWalkDistanceObserver;
+    NSPanel *_mouseWalkSummaryPanel;
 }
 
 - (instancetype)init {
@@ -3602,6 +3891,58 @@ static BOOL EstimateTravelKilometers(NSString *origin, NSString *destination, CG
     [alert runModal];
 }
 
+- (void)showMouseWalkPrettySummaryWithCommitted:(NSString *)committed
+                                          total:(NSString *)total
+                                      remaining:(NSString *)remaining
+                                       progress:(CGFloat)progress
+                                   progressText:(NSString *)progressText
+                                  encouragement:(NSString *)encouragement
+                                       complete:(BOOL)complete {
+    NSRect frame = NSMakeRect(0, 0, 500, 360);
+    NSPanel *panel = [[NSPanel alloc] initWithContentRect:frame
+                                                styleMask:NSWindowStyleMaskTitled
+                                                  backing:NSBackingStoreBuffered
+                                                    defer:NO];
+    panel.title = @"Mouse Walk Trip";
+    panel.releasedWhenClosed = NO;
+    panel.level = NSFloatingWindowLevel;
+
+    NSView *content = [[NSView alloc] initWithFrame:frame];
+    panel.contentView = content;
+
+    NSString *target = [NSString stringWithFormat:@"%.2f km", _cursorController.mouseWalkTargetKilometers];
+    MouseWalkSummaryView *summaryView = [[MouseWalkSummaryView alloc] initWithFrame:NSMakeRect(0, 44, 500, 316)
+                                                                       stickerImage:[_cursorController currentStickerPreviewImage]
+                                                                             colors:[_cursorController currentStickerPreviewColors]
+                                                                             origin:_cursorController.mouseWalkOrigin
+                                                                        destination:_cursorController.mouseWalkDestination
+                                                                             target:target
+                                                                            segment:committed
+                                                                              total:total
+                                                                          remaining:remaining
+                                                                           progress:progress
+                                                                       progressText:progressText
+                                                                      encouragement:encouragement
+                                                                           complete:complete];
+    [content addSubview:summaryView];
+
+    NSButton *button = [[NSButton alloc] initWithFrame:NSMakeRect(352, 12, 124, 30)];
+    button.title = complete ? @"Yay!" : @"Keep Walking";
+    button.bezelStyle = NSBezelStyleRounded;
+    button.target = self;
+    button.action = @selector(closeMouseWalkSummaryPanel:);
+    [content addSubview:button];
+
+    _mouseWalkSummaryPanel = panel;
+    [panel center];
+    [panel makeKeyAndOrderFront:nil];
+    [NSApp runModalForWindow:panel];
+    [panel orderOut:nil];
+    if (_mouseWalkSummaryPanel == panel) {
+        _mouseWalkSummaryPanel = nil;
+    }
+}
+
 - (BOOL)showMouseWalkTravelGoalDialog {
     NSAlert *alert = [[NSAlert alloc] init];
     alert.messageText = @"Mouse Walk Trip";
@@ -3684,18 +4025,13 @@ static BOOL EstimateTravelKilometers(NSString *origin, NSString *destination, CG
     CGFloat remainingMeters = MAX(0, targetMeters - totalMeters);
     CGFloat progress = targetMeters > 0 ? MIN(999.0, totalMeters / targetMeters * 100.0) : 0;
 
-    NSString *message = remainingMeters <= 0.5 ? @"Mouse Walk Trip Complete" : @"Mouse Walk Trip";
-    NSString *informative = [NSString stringWithFormat:
-                             @"From %@ to %@: about %.2f km\n\nThis segment: %@\nTotal mouse walk: %@\nStill to go: %@\nProgress: %.3f%%\n\n%@",
-                             _cursorController.mouseWalkOrigin,
-                             _cursorController.mouseWalkDestination,
-                             _cursorController.mouseWalkTargetKilometers,
-                             [self titleForMouseWalkMeters:committedMeters],
-                             [self titleForMouseWalkMeters:totalMeters],
-                             [self titleForMouseWalkMeters:remainingMeters],
-                             progress,
-                             [self mouseWalkEncouragementForTotalMeters:totalMeters]];
-    [self showMouseWalkMessage:message informativeText:informative];
+    [self showMouseWalkPrettySummaryWithCommitted:[self titleForMouseWalkMeters:committedMeters]
+                                            total:[self titleForMouseWalkMeters:totalMeters]
+                                        remaining:[self titleForMouseWalkMeters:remainingMeters]
+                                         progress:targetMeters > 0 ? totalMeters / targetMeters : 0
+                                     progressText:[NSString stringWithFormat:@"%.3f%%", progress]
+                                    encouragement:[self mouseWalkEncouragementForTotalMeters:totalMeters]
+                                         complete:remainingMeters <= 0.5];
 }
 
 - (NSMenu *)mouseWalkDistanceMenu {
@@ -4053,6 +4389,12 @@ static BOOL EstimateTravelKilometers(NSString *origin, NSString *destination, CG
 - (void)setMouseWalkTravelGoal:(NSMenuItem *)sender {
     [self showMouseWalkTravelGoalDialog];
     [self rebuildMenu];
+}
+
+- (void)closeMouseWalkSummaryPanel:(id)sender {
+    [NSApp stopModal];
+    [_mouseWalkSummaryPanel orderOut:nil];
+    _mouseWalkSummaryPanel = nil;
 }
 
 - (void)commitMouseWalkDistance:(NSMenuItem *)sender {

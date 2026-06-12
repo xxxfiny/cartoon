@@ -14,7 +14,7 @@ A Windows tray-app version of Cartoon Cursor. It draws a transparent click-throu
 - Separate sticker and native cursor color palettes for trail, click/ring, and sparkle particles.
 - Palette editor with four color slots, Hex/RGB inputs, and preset swatches.
 - Sticker walk follow, frame animation for GIFs/static stickers, speed choices, and amplitude choices. Combined walk/frame pose settles when the mouse stops.
-- Mouse Walk Distance tracks the current mouse travel segment and commits it into a total distance on click. Manual commits ask for a small travel goal and show the estimated remaining distance.
+- Mouse Walk Distance tracks the current mouse travel segment and commits it into a total distance on click. Manual commits ask for a small travel goal and show a sticker-themed trip summary with the estimated remaining distance.
 - Best-effort native cursor hiding using the Windows cursor display counter.
 
 ## Build On Windows
