@@ -11,9 +11,17 @@ namespace CartoonCursorWindows;
 
 internal static class Program
 {
+    private const string SingleInstanceMutexName = @"Global\CartoonCursorWindows.SingleInstance";
+
     [STAThread]
     private static void Main()
     {
+        using Mutex singleInstance = new(false, SingleInstanceMutexName, out bool createdNew);
+        if (!createdNew)
+        {
+            return;
+        }
+
         ApplicationConfiguration.Initialize();
         Application.Run(new CursorAppContext());
     }
@@ -959,7 +967,7 @@ internal sealed class CursorAppContext : ApplicationContext
     {
         Point cursor = Cursor.Position;
         _overlay.AddPulse(cursor);
-        CommitMouseWalkDistance();
+        CommitMouseWalkDistance(rebuildMenu: false);
     }
 
     private void UpdateMouseWalkDistance(Point cursor)
