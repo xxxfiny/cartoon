@@ -743,6 +743,7 @@ internal sealed class CursorAppContext : ApplicationContext
     private readonly MouseHook _mouseHook;
     private bool _nativeCursorHidden;
     private bool _hasDistancePoint;
+    private bool _contextMenuOpen;
     private Point _lastDistancePoint;
 
     public CursorAppContext()
@@ -786,6 +787,12 @@ internal sealed class CursorAppContext : ApplicationContext
     {
         ContextMenuStrip? oldMenu = _notifyIcon.ContextMenuStrip;
         ContextMenuStrip menu = new();
+        menu.Opening += (_, _) =>
+        {
+            _contextMenuOpen = true;
+            UpdateMouseWalkDistance(Cursor.Position);
+        };
+        menu.Closed += (_, _) => _contextMenuOpen = false;
 
         menu.Items.Add(new ToolStripMenuItem("Enabled", null, (_, _) =>
         {
@@ -867,14 +874,16 @@ internal sealed class CursorAppContext : ApplicationContext
         });
 
         root.DropDownItems.Add(new ToolStripSeparator());
-        root.DropDownItems.Add(new ToolStripMenuItem("Current Segment: " + FormatDistance(_settings.MouseWalkSegmentPixels))
+        ToolStripMenuItem currentSegmentItem = new("Current Segment: " + FormatDistance(_settings.MouseWalkSegmentPixels))
         {
             Enabled = false
-        });
-        root.DropDownItems.Add(new ToolStripMenuItem("Total Walk: " + FormatDistance(_settings.MouseWalkTotalPixels))
+        };
+        ToolStripMenuItem totalWalkItem = new("Total Walk: " + FormatDistance(_settings.MouseWalkTotalPixels))
         {
             Enabled = false
-        });
+        };
+        root.DropDownItems.Add(currentSegmentItem);
+        root.DropDownItems.Add(totalWalkItem);
         root.DropDownItems.Add(new ToolStripMenuItem("Click commits current segment") { Enabled = false });
         string goalTitle = _settings.MouseWalkTargetKilometers > 0 &&
                            !string.IsNullOrWhiteSpace(_settings.MouseWalkOrigin) &&
@@ -885,11 +894,12 @@ internal sealed class CursorAppContext : ApplicationContext
 
         root.DropDownItems.Add(new ToolStripSeparator());
         root.DropDownItems.Add(new ToolStripMenuItem("Set Travel Goal...", null, (_, _) => { ShowMouseWalkTripGoalDialog(); }));
-        root.DropDownItems.Add(new ToolStripMenuItem("Commit Current Segment", null, (_, _) => { CommitMouseWalkDistance(showTripPopup: true); })
+        ToolStripMenuItem commitCurrentSegmentItem = new("Commit Current Segment", null, (_, _) => { CommitMouseWalkDistance(showTripPopup: true); })
         {
             Enabled = _settings.MouseWalkSegmentPixels >= 1
-        });
-        root.DropDownItems.Add(new ToolStripMenuItem("Reset Current Segment", null, (_, _) =>
+        };
+        root.DropDownItems.Add(commitCurrentSegmentItem);
+        ToolStripMenuItem resetCurrentSegmentItem = new("Reset Current Segment", null, (_, _) =>
         {
             _settings.MouseWalkSegmentPixels = 0;
             _hasDistancePoint = false;
@@ -897,7 +907,8 @@ internal sealed class CursorAppContext : ApplicationContext
         })
         {
             Enabled = _settings.MouseWalkSegmentPixels >= 1
-        });
+        };
+        root.DropDownItems.Add(resetCurrentSegmentItem);
         root.DropDownItems.Add(new ToolStripMenuItem("Reset Total", null, (_, _) =>
         {
             _settings.MouseWalkTotalPixels = 0;
@@ -913,6 +924,15 @@ internal sealed class CursorAppContext : ApplicationContext
             _hasDistancePoint = false;
             SaveAndRefresh();
         }));
+        root.DropDownOpening += (_, _) =>
+        {
+            UpdateMouseWalkDistance(Cursor.Position);
+            currentSegmentItem.Text = "Current Segment: " + FormatDistance(_settings.MouseWalkSegmentPixels);
+            totalWalkItem.Text = "Total Walk: " + FormatDistance(_settings.MouseWalkTotalPixels);
+            bool hasCurrentSegment = _settings.MouseWalkSegmentPixels >= 1;
+            commitCurrentSegmentItem.Enabled = hasCurrentSegment;
+            resetCurrentSegmentItem.Enabled = hasCurrentSegment;
+        };
         return root;
     }
 
@@ -965,6 +985,11 @@ internal sealed class CursorAppContext : ApplicationContext
 
     private void HandleMouseClick()
     {
+        if (_contextMenuOpen)
+        {
+            return;
+        }
+
         Point cursor = Cursor.Position;
         _overlay.AddPulse(cursor);
         CommitMouseWalkDistance(rebuildMenu: false);
@@ -2699,8 +2724,6 @@ internal sealed class MouseHook : IDisposable
 {
     private const int WH_MOUSE_LL = 14;
     private const int WM_LBUTTONDOWN = 0x0201;
-    private const int WM_RBUTTONDOWN = 0x0204;
-    private const int WM_MBUTTONDOWN = 0x0207;
     private readonly NativeMethods.HookProc _hookProc;
     private IntPtr _hookHandle;
 
@@ -2723,10 +2746,7 @@ internal sealed class MouseHook : IDisposable
 
     private IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam)
     {
-        if (nCode >= 0 &&
-            (wParam == (IntPtr)WM_LBUTTONDOWN ||
-             wParam == (IntPtr)WM_RBUTTONDOWN ||
-             wParam == (IntPtr)WM_MBUTTONDOWN))
+        if (nCode >= 0 && wParam == (IntPtr)WM_LBUTTONDOWN)
         {
             Clicked?.Invoke(this, EventArgs.Empty);
         }
