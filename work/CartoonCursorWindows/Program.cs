@@ -876,10 +876,7 @@ internal sealed class CursorAppContext : ApplicationContext
         root.DropDownItems.Add(new ToolStripMenuItem(goalTitle) { Enabled = false });
 
         root.DropDownItems.Add(new ToolStripSeparator());
-        root.DropDownItems.Add(new ToolStripMenuItem("Set Travel Goal...", null, (_, _) => { ShowMouseWalkTripGoalDialog(); })
-        {
-            Enabled = _settings.MouseWalkDistanceEnabled
-        });
+        root.DropDownItems.Add(new ToolStripMenuItem("Set Travel Goal...", null, (_, _) => { ShowMouseWalkTripGoalDialog(); }));
         root.DropDownItems.Add(new ToolStripMenuItem("Commit Current Segment", null, (_, _) => { CommitMouseWalkDistance(showTripPopup: true); })
         {
             Enabled = _settings.MouseWalkSegmentPixels >= 1
@@ -1040,6 +1037,12 @@ internal sealed class CursorAppContext : ApplicationContext
         _settings.MouseWalkOrigin = form.Origin;
         _settings.MouseWalkDestination = form.Destination;
         _settings.MouseWalkTargetKilometers = form.TargetKilometers;
+        if (!_settings.MouseWalkDistanceEnabled)
+        {
+            _settings.MouseWalkDistanceEnabled = true;
+            _lastDistancePoint = Cursor.Position;
+            _hasDistancePoint = true;
+        }
         SaveAndRefresh();
         return true;
     }
